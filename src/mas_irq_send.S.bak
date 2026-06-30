@@ -1,0 +1,103 @@
+	.text
+	.even
+	.globl _mas_interrupt_entry
+
+/*
+ * A1 points to struct MasIrqState:
+ *   0  UBYTE *base
+ *   4  ULONG  size
+ *   8  ULONG  read_pos
+ *   12 ULONG  used
+ *   16 UBYTE  hardware (2=Pro, 1=Lite)
+ */
+_mas_interrupt_entry:
+	btst.b #0,0xbfd000
+	beq.w .quick_return
+	move.l 12(a1),d0
+	cmp.l #202,d0
+	blo.w .quick_return
+	movem.l d0-d7/a3-a4,-(sp)
+	move.l 0(a1),a4
+	add.l 8(a1),a4
+	lea 0xbfe101,a5
+	move.b 16(a1),d0
+	cmp.b #1,d0
+	beq.w .send_lite
+	cmp.b #2,d0
+	beq.b .send_pro
+	bra.w .send_return
+
+.send_pro:
+	moveq.l #-4,d4
+	moveq.l #-2,d5
+	moveq.l #-3,d6
+	moveq.l #-1,d7
+	move.w #201,d3
+.pro_loop:
+	moveq.l #0,d0
+	move.b (a4)+,d0
+	bsr.b .advance_ring
+	moveq.l #3,d2
+.pro_pair_loop:
+	btst #7,d0
+	beq.b .pro_hi_zero
+	move.b d6,(a5)
+	bra.b .pro_hi_done
+.pro_hi_zero:
+	move.b d4,(a5)
+.pro_hi_done:
+	btst #6,d0
+	beq.b .pro_lo_zero
+	move.b d7,(a5)
+	bra.b .pro_lo_done
+.pro_lo_zero:
+	move.b d5,(a5)
+.pro_lo_done:
+	lsl.b #2,d0
+	dbf d2,.pro_pair_loop
+	dbf d3,.pro_loop
+	bra.b .send_end
+
+.send_lite:
+	moveq.l #-2,d4
+	moveq.l #-4,d5
+	moveq.l #-1,d6
+	moveq.l #-3,d7
+	move.w #201,d3
+.lite_loop:
+	moveq.l #0,d0
+	move.b (a4)+,d0
+	bsr.b .advance_ring
+	moveq.l #7,d2
+.lite_bit_loop:
+	btst #7,d0
+	beq.b .lite_zero
+	move.b d6,(a5)
+	move.b d7,(a5)
+	bra.b .lite_done
+.lite_zero:
+	move.b d4,(a5)
+	move.b d5,(a5)
+.lite_done:
+	lsl.b #1,d0
+	dbf d2,.lite_bit_loop
+	dbf d3,.lite_loop
+	bra.b .send_end
+
+.advance_ring:
+	move.l 8(a1),d1
+	addq.l #1,d1
+	cmp.l 4(a1),d1
+	blo.b .no_wrap
+	moveq.l #0,d1
+	move.l 0(a1),a4
+.no_wrap:
+	move.l d1,8(a1)
+	subq.l #1,12(a1)
+	rts
+
+.send_end:
+.send_return:
+	movem.l (sp)+,d0-d7/a3-a4
+.quick_return:
+	rts

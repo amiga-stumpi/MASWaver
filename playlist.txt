@@ -1,0 +1,3 @@
+# MASRadio playlist
+# Syntax: Name|URL or Name=http://... or plain http://...
+Klassik Radio Beats|http://live.streams.klassikradio.de/beats-radio/stream/mp3
