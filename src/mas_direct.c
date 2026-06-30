@@ -32,6 +32,7 @@ struct MasIrqState {
     UBYTE hardware;
     UBYTE pad[3];
     volatile ULONG linear_pos;
+    volatile ULONG status;
 };
 
 static UBYTE *g_ring;
@@ -146,6 +147,7 @@ int mas_direct_init(void)
     g_irq_state.used = 0;
     g_irq_state.hardware = MAS_HARDWARE_PRO;
     g_irq_state.linear_pos = 0;
+    g_irq_state.status = 0;
     mas_direct_reset();
     return 1;
 }
@@ -161,6 +163,8 @@ void mas_direct_shutdown(void)
 
 void mas_direct_start(void)
 {
+    g_irq_state.status &= ~MAS_DIRECT_STATUS_UNDERRUN;
+    g_irq_state.status |= MAS_DIRECT_STATUS_ACTIVE;
     g_active = 1;
     g_started = 1;
     start_cia_timer_interrupt();
@@ -176,6 +180,23 @@ void mas_direct_stop(void)
     g_write_pos = 0;
     g_irq_state.used = 0;
     g_irq_state.linear_pos = 0;
+    g_irq_state.status = 0;
+    Enable();
+}
+
+int mas_direct_had_underrun(void)
+{
+    int r;
+    Disable();
+    r = (g_irq_state.status & MAS_DIRECT_STATUS_UNDERRUN) != 0;
+    Enable();
+    return r;
+}
+
+void mas_direct_clear_underrun(void)
+{
+    Disable();
+    g_irq_state.status &= ~MAS_DIRECT_STATUS_UNDERRUN;
     Enable();
 }
 

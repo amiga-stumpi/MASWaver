@@ -686,8 +686,18 @@ int main(void)
         if ((got_sig & g_timer.sigmask) && timer_drain()) {
             if (g_stream.active && g_stream.started) {
                 stream_pump_socket();
-                update_play_status();
-                timer_start();
+                if (mas_direct_had_underrun()) {
+                    mas_direct_stop();
+                    if (g_stream.fd >= 0) CloseSocket(g_stream.fd);
+                    g_stream.fd = -1;
+                    g_stream.active = 0;
+                    g_stream.started = 0;
+                    set_status("Buffer underrun - stream stopped");
+                    draw_status();
+                } else {
+                    update_play_status();
+                    timer_start();
+                }
             }
         }
         while (g_win && g_win->UserPort) {
