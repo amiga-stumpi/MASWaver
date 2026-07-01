@@ -427,6 +427,15 @@ static void layout_gadgets(void)
     g_quit_gad.TopEdge = y;
 }
 
+static void refresh_button_row(void)
+{
+    if (!g_win) return;
+    layout_gadgets();
+    SetAPen(g_win->RPort, 0);
+    RectFill(g_win->RPort, win_left(), (WORD)(g_win->BorderTop + 1), win_right(), (WORD)(g_win->BorderTop + 24));
+    RefreshGList(&g_search_btn_gad, g_win, 0, 6);
+}
+
 static void set_status(const char *s)
 {
     strncpy(g_status, s, STATUS_LEN - 1);
@@ -1334,12 +1343,12 @@ static void play_selected(void)
 static void setup_gadgets(void)
 {
 #define INIT_BUTTON(g,next,x,y,w,label,id) do { memset(&(g),0,sizeof(g)); (g).NextGadget=(next); (g).LeftEdge=(x); (g).TopEdge=(y); (g).Width=(w); (g).Height=14; (g).Flags=GFLG_GADGHCOMP; (g).Activation=GACT_RELVERIFY; (g).GadgetType=BOOLGADGET; (g).GadgetText=(label); (g).GadgetID=(id); } while(0)
-    INIT_BUTTON(g_search_btn_gad, &g_play_gad, 12, 10, 64, &g_txt_search_btn, GID_SEARCH_BUTTON);
-    INIT_BUTTON(g_play_gad, &g_stop_gad, 84, 10, 52, &g_txt_play, GID_PLAY);
-    INIT_BUTTON(g_stop_gad, &g_prev_gad, 144, 10, 52, &g_txt_stop, GID_STOP);
-    INIT_BUTTON(g_prev_gad, &g_next_gad, 204, 10, 52, &g_txt_prev, GID_PREV);
-    INIT_BUTTON(g_next_gad, &g_quit_gad, 264, 10, 52, &g_txt_next, GID_NEXT);
-    INIT_BUTTON(g_quit_gad, 0, 460, 10, 44, &g_txt_quit, GID_QUIT);
+    INIT_BUTTON(g_search_btn_gad, &g_play_gad, 12, 16, 64, &g_txt_search_btn, GID_SEARCH_BUTTON);
+    INIT_BUTTON(g_play_gad, &g_stop_gad, 84, 16, 52, &g_txt_play, GID_PLAY);
+    INIT_BUTTON(g_stop_gad, &g_prev_gad, 144, 16, 52, &g_txt_stop, GID_STOP);
+    INIT_BUTTON(g_prev_gad, &g_next_gad, 204, 16, 52, &g_txt_prev, GID_PREV);
+    INIT_BUTTON(g_next_gad, &g_quit_gad, 264, 16, 52, &g_txt_next, GID_NEXT);
+    INIT_BUTTON(g_quit_gad, 0, 468, 16, 44, &g_txt_quit, GID_QUIT);
 #undef INIT_BUTTON
 }
 
@@ -1363,7 +1372,7 @@ static int open_gui(void)
     if (!g_win) return 0;
     SetMenuStrip(g_win, &g_menu_help);
     draw_ui();
-    RefreshGList(&g_search_btn_gad, g_win, 0, 6);
+    refresh_button_row();
     return 1;
 }
 
@@ -1405,8 +1414,8 @@ int main(void)
             struct IntuiMessage *msg = (struct IntuiMessage *)GetMsg(g_win->UserPort);
             if (!msg) break;
             if (msg->Class == IDCMP_CLOSEWINDOW) done = 1;
-            else if (msg->Class == IDCMP_REFRESHWINDOW) { BeginRefresh(g_win); EndRefresh(g_win, TRUE); draw_ui(); RefreshGList(&g_search_btn_gad, g_win, 0, 6); }
-            else if (msg->Class == IDCMP_NEWSIZE) { draw_ui(); RefreshGList(&g_search_btn_gad, g_win, 0, 6); }
+            else if (msg->Class == IDCMP_REFRESHWINDOW) { BeginRefresh(g_win); EndRefresh(g_win, TRUE); draw_ui(); refresh_button_row(); }
+            else if (msg->Class == IDCMP_NEWSIZE) { draw_ui(); refresh_button_row(); }
             else if (msg->Class == IDCMP_MOUSEBUTTONS) {
                 if (msg->Code == SELECTDOWN && msg->MouseX >= win_left() && msg->MouseY >= (g_win->BorderTop + 56) && msg->MouseY < status_top()) {
                     LONG row = (msg->MouseY - (g_win->BorderTop + 56)) / 11;
