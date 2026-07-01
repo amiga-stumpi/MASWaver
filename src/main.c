@@ -442,6 +442,25 @@ static void set_status(const char *s)
     g_status[STATUS_LEN - 1] = 0;
 }
 
+static void draw_status_line(WORD x, WORD y, WORD r, const char *line)
+{
+    LONG len;
+    LONG max_chars;
+
+    if (!g_win || !line) return;
+    SetAPen(g_win->RPort, 0);
+    RectFill(g_win->RPort, x, (WORD)(y - 8), r, (WORD)(y + 2));
+    SetAPen(g_win->RPort, 1);
+    SetBPen(g_win->RPort, 0);
+    SetDrMd(g_win->RPort, JAM1);
+    len = cstrlen(line);
+    max_chars = (LONG)((r - x) / 8);
+    if (max_chars < 0) max_chars = 0;
+    if (len > max_chars) len = max_chars;
+    Move(g_win->RPort, x, y);
+    if (len > 0) Text(g_win->RPort, (STRPTR)line, len);
+}
+
 static void draw_status(void)
 {
     char line[180];
@@ -449,39 +468,32 @@ static void draw_status(void)
 
     if (!g_win) return;
     x = (WORD)(win_left() + 4);
-    r = win_right();
+    r = (WORD)(g_win->Width - g_win->BorderRight - 2);
+    if (r < x) r = x;
     y = status_top();
     SetAPen(g_win->RPort, 0);
     RectFill(g_win->RPort, win_left(), y, r, win_bottom());
-    SetAPen(g_win->RPort, 1);
-    SetBPen(g_win->RPort, 0);
-    SetDrMd(g_win->RPort, JAM1);
-    Move(g_win->RPort, x, (WORD)(y + 12));
-    Text(g_win->RPort, (STRPTR)g_status, cstrlen(g_status));
+    draw_status_line(x, (WORD)(y + 12), r, g_status);
 
     line[0] = 0;
     strncat(line, "Name: ", sizeof(line) - strlen(line) - 1);
     strncat(line, g_icy_name[0] ? g_icy_name : "-", sizeof(line) - strlen(line) - 1);
-    Move(g_win->RPort, x, (WORD)(y + 23));
-    Text(g_win->RPort, (STRPTR)line, cstrlen(line));
+    draw_status_line(x, (WORD)(y + 23), r, line);
 
     line[0] = 0;
     strncat(line, "Bitrate: ", sizeof(line) - strlen(line) - 1);
     strncat(line, g_icy_bitrate[0] ? g_icy_bitrate : "-", sizeof(line) - strlen(line) - 1);
-    Move(g_win->RPort, x, (WORD)(y + 34));
-    Text(g_win->RPort, (STRPTR)line, cstrlen(line));
+    draw_status_line(x, (WORD)(y + 34), r, line);
 
     line[0] = 0;
     strncat(line, "Genre: ", sizeof(line) - strlen(line) - 1);
     strncat(line, g_icy_genre[0] ? g_icy_genre : "-", sizeof(line) - strlen(line) - 1);
-    Move(g_win->RPort, x, (WORD)(y + 45));
-    Text(g_win->RPort, (STRPTR)line, cstrlen(line));
+    draw_status_line(x, (WORD)(y + 45), r, line);
 
     line[0] = 0;
     strncat(line, "StreamTitle: ", sizeof(line) - strlen(line) - 1);
     strncat(line, g_icy_title[0] ? g_icy_title : "-", sizeof(line) - strlen(line) - 1);
-    Move(g_win->RPort, x, (WORD)(y + 56));
-    Text(g_win->RPort, (STRPTR)line, cstrlen(line));
+    draw_status_line(x, (WORD)(y + 56), r, line);
 }
 
 
