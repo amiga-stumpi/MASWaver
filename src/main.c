@@ -29,8 +29,8 @@
 #include "mas_direct.h"
 
 
-#define APP_TITLE "MASWaver v0.1"
-#define VERSION_TEXT "MASWaver v0.1 by Marcel Jaehne (c)2026"
+#define APP_TITLE "MASWaver v0.5"
+#define VERSION_TEXT "MASWaver v0.5 by Marcel Jaehne (c)2026"
 
 #define WIN_W 520
 #define WIN_H 220
@@ -594,7 +594,7 @@ static int stream_send_request(const char *url)
     strncat(req, path, sizeof(req)-strlen(req)-1);
     strncat(req, " HTTP/1.1\r\nHost: ", sizeof(req)-strlen(req)-1);
     strncat(req, host, sizeof(req)-strlen(req)-1);
-    strncat(req, "\r\nUser-Agent: MASWaver/0.1\r\nAccept: */*\r\nIcy-MetaData: 1\r\nConnection: close\r\n\r\n", sizeof(req)-strlen(req)-1);
+    strncat(req, "\r\nUser-Agent: MASWaver/0.5\r\nAccept: */*\r\nIcy-MetaData: 1\r\nConnection: close\r\n\r\n", sizeof(req)-strlen(req)-1);
     return stream_write_all_transport(req, cstrlen(req));
 }
 
