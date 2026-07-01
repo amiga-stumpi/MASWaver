@@ -34,6 +34,11 @@
 
 #define WIN_W 520
 #define WIN_H 232
+#define WIN_MAX_W 640
+#define WIN_MAX_H 480
+#define WIN_INNER_MARGIN 8
+#define STATUS_BLOCK_H 74
+#define BUTTON_TOP_PAD 6
 #define MAX_RESULTS 8
 #define TITLE_LEN 64
 #define URL_LEN 192
@@ -361,6 +366,67 @@ static void timer_cleanup(void)
 
 static void draw_status(void);
 
+static WORD win_left(void)
+{
+    return g_win ? (WORD)(g_win->BorderLeft + WIN_INNER_MARGIN) : WIN_INNER_MARGIN;
+}
+
+static WORD win_right(void)
+{
+    WORD r;
+    if (!g_win) return (WORD)(WIN_W - WIN_INNER_MARGIN);
+    r = (WORD)(g_win->Width - g_win->BorderRight - WIN_INNER_MARGIN);
+    if (r < win_left()) r = win_left();
+    return r;
+}
+
+static WORD win_top(void)
+{
+    return g_win ? (WORD)(g_win->BorderTop + WIN_INNER_MARGIN) : WIN_INNER_MARGIN;
+}
+
+static WORD win_bottom(void)
+{
+    WORD b;
+    if (!g_win) return (WORD)(WIN_H - WIN_INNER_MARGIN);
+    b = (WORD)(g_win->Height - g_win->BorderBottom - WIN_INNER_MARGIN);
+    if (b < win_top()) b = win_top();
+    return b;
+}
+
+static WORD status_top(void)
+{
+    WORD b = win_bottom();
+    WORD t = (WORD)(b - STATUS_BLOCK_H + 12);
+    WORD min_t = (WORD)(win_top() + 52);
+    if (t < min_t) t = min_t;
+    return t;
+}
+
+static void layout_gadgets(void)
+{
+    WORD y;
+    WORD right;
+    if (!g_win) return;
+    y = (WORD)(g_win->BorderTop + BUTTON_TOP_PAD);
+    right = win_right();
+    g_search_btn_gad.LeftEdge = win_left();
+    g_search_btn_gad.TopEdge = y;
+    g_play_gad.LeftEdge = (WORD)(g_search_btn_gad.LeftEdge + 72);
+    g_play_gad.TopEdge = y;
+    g_stop_gad.LeftEdge = (WORD)(g_play_gad.LeftEdge + 60);
+    g_stop_gad.TopEdge = y;
+    g_prev_gad.LeftEdge = (WORD)(g_stop_gad.LeftEdge + 60);
+    g_prev_gad.TopEdge = y;
+    g_next_gad.LeftEdge = (WORD)(g_prev_gad.LeftEdge + 60);
+    g_next_gad.TopEdge = y;
+    g_quit_gad.LeftEdge = (WORD)(right - g_quit_gad.Width);
+    if (g_quit_gad.LeftEdge < (WORD)(g_next_gad.LeftEdge + g_next_gad.Width + 8)) {
+        g_quit_gad.LeftEdge = (WORD)(g_next_gad.LeftEdge + g_next_gad.Width + 8);
+    }
+    g_quit_gad.TopEdge = y;
+}
+
 static void set_status(const char *s)
 {
     strncpy(g_status, s, STATUS_LEN - 1);
@@ -370,38 +436,42 @@ static void set_status(const char *s)
 static void draw_status(void)
 {
     char line[180];
+    WORD x, r, y;
 
     if (!g_win) return;
+    x = (WORD)(win_left() + 4);
+    r = win_right();
+    y = status_top();
     SetAPen(g_win->RPort, 0);
-    RectFill(g_win->RPort, 8, g_win->Height - 74, g_win->Width - 12, g_win->Height - 12);
+    RectFill(g_win->RPort, win_left(), y, r, win_bottom());
     SetAPen(g_win->RPort, 1);
     SetBPen(g_win->RPort, 0);
     SetDrMd(g_win->RPort, JAM1);
-    Move(g_win->RPort, 12, g_win->Height - 62);
+    Move(g_win->RPort, x, (WORD)(y + 12));
     Text(g_win->RPort, (STRPTR)g_status, cstrlen(g_status));
 
     line[0] = 0;
     strncat(line, "Name: ", sizeof(line) - strlen(line) - 1);
     strncat(line, g_icy_name[0] ? g_icy_name : "-", sizeof(line) - strlen(line) - 1);
-    Move(g_win->RPort, 12, g_win->Height - 51);
+    Move(g_win->RPort, x, (WORD)(y + 23));
     Text(g_win->RPort, (STRPTR)line, cstrlen(line));
 
     line[0] = 0;
     strncat(line, "Bitrate: ", sizeof(line) - strlen(line) - 1);
     strncat(line, g_icy_bitrate[0] ? g_icy_bitrate : "-", sizeof(line) - strlen(line) - 1);
-    Move(g_win->RPort, 12, g_win->Height - 40);
+    Move(g_win->RPort, x, (WORD)(y + 34));
     Text(g_win->RPort, (STRPTR)line, cstrlen(line));
 
     line[0] = 0;
     strncat(line, "Genre: ", sizeof(line) - strlen(line) - 1);
     strncat(line, g_icy_genre[0] ? g_icy_genre : "-", sizeof(line) - strlen(line) - 1);
-    Move(g_win->RPort, 12, g_win->Height - 29);
+    Move(g_win->RPort, x, (WORD)(y + 45));
     Text(g_win->RPort, (STRPTR)line, cstrlen(line));
 
     line[0] = 0;
     strncat(line, "StreamTitle: ", sizeof(line) - strlen(line) - 1);
     strncat(line, g_icy_title[0] ? g_icy_title : "-", sizeof(line) - strlen(line) - 1);
-    Move(g_win->RPort, 12, g_win->Height - 18);
+    Move(g_win->RPort, x, (WORD)(y + 56));
     Text(g_win->RPort, (STRPTR)line, cstrlen(line));
 }
 
@@ -410,17 +480,26 @@ static void draw_ui(void)
 {
     LONG i;
     char line[160];
+    WORD x, y0, list_top, list_bottom;
     if (!g_win) return;
+    layout_gadgets();
+    x = (WORD)(win_left() + 4);
+    y0 = (WORD)(g_win->BorderTop + 36);
+    list_top = (WORD)(y0 + 20);
+    list_bottom = (WORD)(status_top() - 4);
+    if (list_bottom < list_top) list_bottom = list_top;
     SetAPen(g_win->RPort, 0);
-    RectFill(g_win->RPort, 8, 38, g_win->Width - 12, g_win->Height - 76);
+    RectFill(g_win->RPort, win_left(), (WORD)(g_win->BorderTop + 24), win_right(), list_bottom);
     SetAPen(g_win->RPort, 1);
     SetBPen(g_win->RPort, 0);
     SetDrMd(g_win->RPort, JAM1);
-    Move(g_win->RPort, 12, 52);
+    Move(g_win->RPort, x, y0);
     Text(g_win->RPort, (STRPTR)"Available Streams", cstrlen("Available Streams"));
     for (i = 0; i < MAX_RESULTS; ++i) {
         LONG idx = i;
-        Move(g_win->RPort, 16, 72 + i * 11);
+        WORD row_y = (WORD)(list_top + i * 11);
+        if (row_y > list_bottom) break;
+        Move(g_win->RPort, (WORD)(x + 4), row_y);
         if (idx < g_result_count) {
             if (idx == g_selected) SetAPen(g_win->RPort, 3); else SetAPen(g_win->RPort, 1);
             line[0] = 0;
@@ -449,16 +528,20 @@ static void draw_info_window(struct Window *w)
     if (!w) return;
     rp = w->RPort;
     SetAPen(rp, 0);
-    RectFill(rp, 4, 12, w->Width - 6, w->Height - 6);
+    RectFill(rp, w->BorderLeft + 4, w->BorderTop + 4, w->Width - w->BorderRight - 6, w->Height - w->BorderBottom - 6);
     SetAPen(rp, 1);
     SetBPen(rp, 0);
     SetDrMd(rp, JAM1);
-    info_text(rp, 12, 24, "MASWaver for Kickstart 1.3");
-    info_text(rp, 12, 38, "Version: v0.5");
-    info_text(rp, 12, 52, "by Marcel Jaehne (c)2026");
-    info_text(rp, 12, 68, "MP3 internet streams for MAS Player Pro");
-    info_text(rp, 12, 86, "If you want to buy me a coffee,");
-    info_text(rp, 12, 100, "send me a buck to paypal.me/mytubefree");
+    {
+        WORD x = (WORD)(w->BorderLeft + 12);
+        WORD y = (WORD)(w->BorderTop + 14);
+        info_text(rp, x, y, "MASWaver for Kickstart 1.3");
+        info_text(rp, x, (WORD)(y + 14), "Version: v0.5");
+        info_text(rp, x, (WORD)(y + 28), "by Marcel Jaehne (c)2026");
+        info_text(rp, x, (WORD)(y + 44), "MP3 internet streams for MAS Player Pro");
+        info_text(rp, x, (WORD)(y + 62), "If you want to buy me a coffee,");
+        info_text(rp, x, (WORD)(y + 76), "send me a buck to paypal.me/mytubefree");
+    }
 }
 
 static void show_info_window(void)
@@ -470,8 +553,8 @@ static void show_info_window(void)
     memset(&nw, 0, sizeof(nw));
     nw.LeftEdge = g_win ? (WORD)(g_win->LeftEdge + 30) : 40;
     nw.TopEdge = g_win ? (WORD)(g_win->TopEdge + 25) : 30;
-    nw.Width = 330;
-    nw.Height = 118;
+    nw.Width = 348;
+    nw.Height = 132;
     nw.DetailPen = 0;
     nw.BlockPen = 1;
     nw.IDCMPFlags = IDCMP_CLOSEWINDOW | IDCMP_REFRESHWINDOW | IDCMP_MOUSEBUTTONS;
@@ -1267,15 +1350,20 @@ static int open_gui(void)
     memset(&nw, 0, sizeof(nw));
     nw.LeftEdge = 20; nw.TopEdge = 20; nw.Width = WIN_W; nw.Height = WIN_H;
     nw.DetailPen = 0; nw.BlockPen = 1;
-    nw.IDCMPFlags = IDCMP_CLOSEWINDOW | IDCMP_GADGETUP | IDCMP_REFRESHWINDOW | IDCMP_MOUSEBUTTONS | IDCMP_MENUPICK;
-    nw.Flags = WFLG_CLOSEGADGET | WFLG_DRAGBAR | WFLG_DEPTHGADGET | WFLG_ACTIVATE | WFLG_SIMPLE_REFRESH;
+    nw.IDCMPFlags = IDCMP_CLOSEWINDOW | IDCMP_GADGETUP | IDCMP_REFRESHWINDOW | IDCMP_MOUSEBUTTONS | IDCMP_MENUPICK | IDCMP_NEWSIZE;
+    nw.Flags = WFLG_CLOSEGADGET | WFLG_DRAGBAR | WFLG_DEPTHGADGET | WFLG_SIZEGADGET | WFLG_ACTIVATE | WFLG_SIMPLE_REFRESH;
     nw.FirstGadget = &g_search_btn_gad;
     nw.Title = (UBYTE *)APP_TITLE;
     nw.Type = WBENCHSCREEN;
+    nw.MinWidth = WIN_W;
+    nw.MinHeight = WIN_H;
+    nw.MaxWidth = WIN_MAX_W;
+    nw.MaxHeight = WIN_MAX_H;
     g_win = OpenWindow(&nw);
     if (!g_win) return 0;
     SetMenuStrip(g_win, &g_menu_help);
     draw_ui();
+    RefreshGList(&g_search_btn_gad, g_win, 0, 6);
     return 1;
 }
 
@@ -1317,10 +1405,11 @@ int main(void)
             struct IntuiMessage *msg = (struct IntuiMessage *)GetMsg(g_win->UserPort);
             if (!msg) break;
             if (msg->Class == IDCMP_CLOSEWINDOW) done = 1;
-            else if (msg->Class == IDCMP_REFRESHWINDOW) { BeginRefresh(g_win); EndRefresh(g_win, TRUE); draw_ui(); }
+            else if (msg->Class == IDCMP_REFRESHWINDOW) { BeginRefresh(g_win); EndRefresh(g_win, TRUE); draw_ui(); RefreshGList(&g_search_btn_gad, g_win, 0, 6); }
+            else if (msg->Class == IDCMP_NEWSIZE) { draw_ui(); RefreshGList(&g_search_btn_gad, g_win, 0, 6); }
             else if (msg->Class == IDCMP_MOUSEBUTTONS) {
-                if (msg->Code == SELECTDOWN && msg->MouseX >= 12 && msg->MouseY >= 66 && msg->MouseY < 72 + MAX_RESULTS * 11) {
-                    LONG row = (msg->MouseY - 72) / 11;
+                if (msg->Code == SELECTDOWN && msg->MouseX >= win_left() && msg->MouseY >= (g_win->BorderTop + 56) && msg->MouseY < status_top()) {
+                    LONG row = (msg->MouseY - (g_win->BorderTop + 56)) / 11;
                     if (row >= 0 && row < g_result_count) {
                         g_selected = row;
                         draw_ui();
