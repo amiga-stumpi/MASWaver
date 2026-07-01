@@ -33,7 +33,7 @@
 #define VERSION_TEXT "MASWaver v0.5 by Marcel Jaehne (c)2026"
 
 #define WIN_W 520
-#define WIN_H 220
+#define WIN_H 232
 #define MAX_RESULTS 8
 #define TITLE_LEN 64
 #define URL_LEN 192
@@ -61,6 +61,9 @@
 #define GID_PREV 5
 #define GID_NEXT 6
 #define GID_QUIT 7
+
+#define MENU_HELP 0
+#define ITEM_INFO 0
 
 LONG __stack = 524288;
 
@@ -143,6 +146,10 @@ static struct IntuiText g_txt_stop = {1,0,JAM1,14,3,0,(UBYTE *)"Stop",0};
 static struct IntuiText g_txt_prev = {1,0,JAM1,10,3,0,(UBYTE *)"Prev",0};
 static struct IntuiText g_txt_next = {1,0,JAM1,10,3,0,(UBYTE *)"Next",0};
 static struct IntuiText g_txt_quit = {1,0,JAM1,10,3,0,(UBYTE *)"Quit",0};
+static struct IntuiText g_menu_info_text = {0,1,JAM1,0,1,0,(UBYTE *)"Info",0};
+
+static struct MenuItem g_menu_info_item = {0,0,0,60,10,ITEMTEXT|ITEMENABLED|HIGHBOX,0,(APTR)&g_menu_info_text,0,0,0,0};
+static struct Menu g_menu_help = {0,0,0,16,10,MENUENABLED,(UBYTE *)"?",&g_menu_info_item,0,0,0,0};
 
 static struct Gadget g_quit_gad;
 static struct Gadget g_next_gad;
@@ -366,17 +373,21 @@ static void draw_status(void)
 
     if (!g_win) return;
     SetAPen(g_win->RPort, 0);
-    RectFill(g_win->RPort, 8, g_win->Height - 62, g_win->Width - 12, g_win->Height - 12);
+    RectFill(g_win->RPort, 8, g_win->Height - 74, g_win->Width - 12, g_win->Height - 12);
     SetAPen(g_win->RPort, 1);
     SetBPen(g_win->RPort, 0);
     SetDrMd(g_win->RPort, JAM1);
-    Move(g_win->RPort, 12, g_win->Height - 51);
+    Move(g_win->RPort, 12, g_win->Height - 62);
     Text(g_win->RPort, (STRPTR)g_status, cstrlen(g_status));
 
     line[0] = 0;
     strncat(line, "Name: ", sizeof(line) - strlen(line) - 1);
     strncat(line, g_icy_name[0] ? g_icy_name : "-", sizeof(line) - strlen(line) - 1);
-    strncat(line, "  Bitrate: ", sizeof(line) - strlen(line) - 1);
+    Move(g_win->RPort, 12, g_win->Height - 51);
+    Text(g_win->RPort, (STRPTR)line, cstrlen(line));
+
+    line[0] = 0;
+    strncat(line, "Bitrate: ", sizeof(line) - strlen(line) - 1);
     strncat(line, g_icy_bitrate[0] ? g_icy_bitrate : "-", sizeof(line) - strlen(line) - 1);
     Move(g_win->RPort, 12, g_win->Height - 40);
     Text(g_win->RPort, (STRPTR)line, cstrlen(line));
@@ -401,7 +412,7 @@ static void draw_ui(void)
     char line[160];
     if (!g_win) return;
     SetAPen(g_win->RPort, 0);
-    RectFill(g_win->RPort, 8, 38, g_win->Width - 12, g_win->Height - 64);
+    RectFill(g_win->RPort, 8, 38, g_win->Width - 12, g_win->Height - 76);
     SetAPen(g_win->RPort, 1);
     SetBPen(g_win->RPort, 0);
     SetDrMd(g_win->RPort, JAM1);
@@ -424,6 +435,69 @@ static void draw_ui(void)
         }
     }
     draw_status();
+}
+
+static void info_text(struct RastPort *rp, WORD x, WORD y, const char *s)
+{
+    Move(rp, x, y);
+    Text(rp, (STRPTR)s, cstrlen(s));
+}
+
+static void draw_info_window(struct Window *w)
+{
+    struct RastPort *rp;
+    if (!w) return;
+    rp = w->RPort;
+    SetAPen(rp, 0);
+    RectFill(rp, 4, 12, w->Width - 6, w->Height - 6);
+    SetAPen(rp, 1);
+    SetBPen(rp, 0);
+    SetDrMd(rp, JAM1);
+    info_text(rp, 12, 24, "MASWaver for Kickstart 1.3");
+    info_text(rp, 12, 38, "Version: v0.5");
+    info_text(rp, 12, 52, "by Marcel Jaehne (c)2026");
+    info_text(rp, 12, 68, "MP3 internet streams for MAS Player Pro");
+    info_text(rp, 12, 86, "If you want to buy me a coffee,");
+    info_text(rp, 12, 100, "send me a buck to paypal.me/mytubefree");
+}
+
+static void show_info_window(void)
+{
+    struct NewWindow nw;
+    struct Window *w;
+    int done = 0;
+
+    memset(&nw, 0, sizeof(nw));
+    nw.LeftEdge = g_win ? (WORD)(g_win->LeftEdge + 30) : 40;
+    nw.TopEdge = g_win ? (WORD)(g_win->TopEdge + 25) : 30;
+    nw.Width = 330;
+    nw.Height = 118;
+    nw.DetailPen = 0;
+    nw.BlockPen = 1;
+    nw.IDCMPFlags = IDCMP_CLOSEWINDOW | IDCMP_REFRESHWINDOW | IDCMP_MOUSEBUTTONS;
+    nw.Flags = WFLG_CLOSEGADGET | WFLG_DRAGBAR | WFLG_DEPTHGADGET | WFLG_ACTIVATE | WFLG_SMART_REFRESH;
+    nw.Title = (UBYTE *)"Info";
+    nw.Type = WBENCHSCREEN;
+
+    w = OpenWindow(&nw);
+    if (!w) return;
+    draw_info_window(w);
+    while (!done) {
+        Wait(1UL << w->UserPort->mp_SigBit);
+        while (1) {
+            struct IntuiMessage *msg = (struct IntuiMessage *)GetMsg(w->UserPort);
+            if (!msg) break;
+            if (msg->Class == IDCMP_CLOSEWINDOW) done = 1;
+            else if (msg->Class == IDCMP_REFRESHWINDOW) {
+                BeginRefresh(w);
+                EndRefresh(w, TRUE);
+                draw_info_window(w);
+            }
+            else if (msg->Class == IDCMP_MOUSEBUTTONS && msg->Code == SELECTDOWN) done = 1;
+            ReplyMsg((struct Message *)msg);
+        }
+    }
+    CloseWindow(w);
 }
 
 static void clear_playlist(void)
@@ -1193,13 +1267,14 @@ static int open_gui(void)
     memset(&nw, 0, sizeof(nw));
     nw.LeftEdge = 20; nw.TopEdge = 20; nw.Width = WIN_W; nw.Height = WIN_H;
     nw.DetailPen = 0; nw.BlockPen = 1;
-    nw.IDCMPFlags = IDCMP_CLOSEWINDOW | IDCMP_GADGETUP | IDCMP_REFRESHWINDOW | IDCMP_MOUSEBUTTONS;
+    nw.IDCMPFlags = IDCMP_CLOSEWINDOW | IDCMP_GADGETUP | IDCMP_REFRESHWINDOW | IDCMP_MOUSEBUTTONS | IDCMP_MENUPICK;
     nw.Flags = WFLG_CLOSEGADGET | WFLG_DRAGBAR | WFLG_DEPTHGADGET | WFLG_ACTIVATE | WFLG_SIMPLE_REFRESH;
     nw.FirstGadget = &g_search_btn_gad;
     nw.Title = (UBYTE *)APP_TITLE;
     nw.Type = WBENCHSCREEN;
     g_win = OpenWindow(&nw);
     if (!g_win) return 0;
+    SetMenuStrip(g_win, &g_menu_help);
     draw_ui();
     return 1;
 }
@@ -1252,6 +1327,14 @@ int main(void)
                     }
                 }
             }
+            else if (msg->Class == IDCMP_MENUPICK) {
+                UWORD code = msg->Code;
+                while (code != MENUNULL) {
+                    struct MenuItem *item = ItemAddress(&g_menu_help, code);
+                    if (MENUNUM(code) == MENU_HELP && ITEMNUM(code) == ITEM_INFO) show_info_window();
+                    code = item ? item->NextSelect : MENUNULL;
+                }
+            }
             else if (msg->Class == IDCMP_GADGETUP) {
                 struct Gadget *gad = (struct Gadget *)msg->IAddress;
                 switch (gad->GadgetID) {
@@ -1269,7 +1352,7 @@ int main(void)
 out:
     stop_stream();
     mas_direct_shutdown();
-    if (g_win) CloseWindow(g_win);
+    if (g_win) { ClearMenuStrip(g_win); CloseWindow(g_win); }
     timer_cleanup();
     close_tls_lib();
     if (SocketBase) CloseLibrary(SocketBase);
