@@ -365,6 +365,7 @@ static void timer_cleanup(void)
 }
 
 static void draw_status(void);
+static void service_stream_timer_signal(void);
 
 static WORD win_left(void)
 {
@@ -587,7 +588,9 @@ static void show_info_window(void)
     if (!w) return;
     draw_info_window(w);
     while (!done) {
-        Wait(1UL << w->UserPort->mp_SigBit);
+        ULONG sigmask = (1UL << w->UserPort->mp_SigBit) | g_timer.sigmask;
+        ULONG got_sig = Wait(sigmask);
+        if (got_sig & g_timer.sigmask) service_stream_timer_signal();
         while (1) {
             struct IntuiMessage *msg = (struct IntuiMessage *)GetMsg(w->UserPort);
             if (!msg) break;
@@ -1274,6 +1277,24 @@ static int stream_pump_socket(void)
     return got_data;
 }
 
+static void service_stream_timer_signal(void)
+{
+    if (!timer_drain()) return;
+    if (g_stream.active && g_stream.started) {
+        stream_pump_socket();
+        if (mas_direct_had_underrun()) {
+            mas_direct_stop();
+            stream_close_transport();
+            g_stream.active = 0;
+            g_stream.started = 0;
+            set_status("Buffer underrun - stream stopped");
+            draw_status();
+        } else {
+            timer_start();
+        }
+    }
+}
+
 static int stream_prebuffer(void)
 {
     g_total_stream_bytes = 0;
@@ -1407,21 +1428,7 @@ int main(void)
     }
     while (!done) {
         ULONG got_sig = Wait(sigmask);
-        if ((got_sig & g_timer.sigmask) && timer_drain()) {
-            if (g_stream.active && g_stream.started) {
-                stream_pump_socket();
-                if (mas_direct_had_underrun()) {
-                    mas_direct_stop();
-                    stream_close_transport();
-                    g_stream.active = 0;
-                    g_stream.started = 0;
-                    set_status("Buffer underrun - stream stopped");
-                    draw_status();
-                } else {
-                    timer_start();
-                }
-            }
-        }
+        if (got_sig & g_timer.sigmask) service_stream_timer_signal();
         while (g_win && g_win->UserPort) {
             struct IntuiMessage *msg = (struct IntuiMessage *)GetMsg(g_win->UserPort);
             if (!msg) break;
