@@ -407,10 +407,8 @@ static WORD status_top(void)
 static void layout_gadgets(void)
 {
     WORD y;
-    WORD right;
     if (!g_win) return;
     y = (WORD)(g_win->BorderTop + BUTTON_TOP_PAD);
-    right = win_right();
     g_search_btn_gad.LeftEdge = win_left();
     g_search_btn_gad.TopEdge = y;
     g_play_gad.LeftEdge = (WORD)(g_search_btn_gad.LeftEdge + 72);
@@ -421,10 +419,7 @@ static void layout_gadgets(void)
     g_prev_gad.TopEdge = y;
     g_next_gad.LeftEdge = (WORD)(g_prev_gad.LeftEdge + 60);
     g_next_gad.TopEdge = y;
-    g_quit_gad.LeftEdge = (WORD)(right - g_quit_gad.Width);
-    if (g_quit_gad.LeftEdge < (WORD)(g_next_gad.LeftEdge + g_next_gad.Width + 8)) {
-        g_quit_gad.LeftEdge = (WORD)(g_next_gad.LeftEdge + g_next_gad.Width + 8);
-    }
+    g_quit_gad.LeftEdge = (WORD)(g_next_gad.LeftEdge + 60);
     g_quit_gad.TopEdge = y;
 }
 
@@ -433,7 +428,7 @@ static void refresh_button_row(void)
     if (!g_win) return;
     layout_gadgets();
     SetAPen(g_win->RPort, 0);
-    RectFill(g_win->RPort, win_left(), (WORD)(g_win->BorderTop + 1), win_right(), (WORD)(g_win->BorderTop + 24));
+    RectFill(g_win->RPort, g_win->BorderLeft, (WORD)(g_win->BorderTop + 1), (WORD)(g_win->Width - g_win->BorderRight - 1), (WORD)(g_win->BorderTop + 24));
     RefreshGList(&g_search_btn_gad, g_win, 0, 6);
 }
 
@@ -1381,7 +1376,7 @@ static void setup_gadgets(void)
     INIT_BUTTON(g_stop_gad, &g_prev_gad, 144, 16, 52, &g_txt_stop, GID_STOP);
     INIT_BUTTON(g_prev_gad, &g_next_gad, 204, 16, 52, &g_txt_prev, GID_PREV);
     INIT_BUTTON(g_next_gad, &g_quit_gad, 264, 16, 52, &g_txt_next, GID_NEXT);
-    INIT_BUTTON(g_quit_gad, 0, 468, 16, 44, &g_txt_quit, GID_QUIT);
+    INIT_BUTTON(g_quit_gad, 0, 324, 16, 44, &g_txt_quit, GID_QUIT);
 #undef INIT_BUTTON
 }
 
