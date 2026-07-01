@@ -11,6 +11,13 @@ _mas_interrupt_entry:
 	move.l 20(a1),d0
 	cmp.l 4(a1),d0
 	bhs.w Send_Quick_Return
+	move.l 4(a1),d1
+	sub.l d0,d1
+	cmp.l #202,d1
+	bhs.w Send_Read_Contiguous
+	moveq.l #0,d0
+	move.l d0,20(a1)
+Send_Read_Contiguous:
 	movem.l d3-d7/a3-a4,-(sp)
 	move.l 0(a1),a4
 	add.l 20(a1),a4

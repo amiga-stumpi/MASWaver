@@ -3,11 +3,12 @@
 
 #include <exec/types.h>
 
-#define MAS_DIRECT_BUFFER_SIZE 1048576UL
+#define MAS_DIRECT_BUFFER_SIZE 524190UL
 #define MAS_DIRECT_NEED_PREBUFFER 32768UL
 #define MAS_DIRECT_STATUS_ACTIVE 1
 #define MAS_DIRECT_STATUS_UNDERRUN 2
 
+int mas_direct_prepare(void);
 int mas_direct_init(void);
 void mas_direct_shutdown(void);
 void mas_direct_reset(void);

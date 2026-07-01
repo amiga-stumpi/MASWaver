@@ -133,7 +133,7 @@ void mas_direct_reset(void)
     iic_write_cmd(startup, sizeof(startup));
 }
 
-int mas_direct_init(void)
+int mas_direct_prepare(void)
 {
     if (g_ring) return 1;
     g_ring = (UBYTE *)AllocMem(MAS_DIRECT_BUFFER_SIZE, MEMF_PUBLIC);
@@ -148,6 +148,12 @@ int mas_direct_init(void)
     g_irq_state.hardware = MAS_HARDWARE_PRO;
     g_irq_state.linear_pos = 0;
     g_irq_state.status = 0;
+    return 1;
+}
+
+int mas_direct_init(void)
+{
+    if (!mas_direct_prepare()) return 0;
     mas_direct_reset();
     return 1;
 }
@@ -228,16 +234,33 @@ ULONG mas_direct_write(const UBYTE *data, ULONG len)
 {
     ULONG done = 0;
     if (!g_ring || !data) return 0;
+
     while (done < len) {
+        ULONG free_bytes;
+        ULONG pos;
+        ULONG chunk;
+
         Disable();
-        if (g_irq_state.used >= MAS_DIRECT_BUFFER_SIZE) {
-            Enable();
-            break;
-        }
-        g_ring[g_write_pos++] = data[done++];
-        if (g_write_pos >= MAS_DIRECT_BUFFER_SIZE) g_write_pos = 0;
-        ++g_irq_state.used;
+        free_bytes = (g_irq_state.used >= MAS_DIRECT_BUFFER_SIZE) ? 0 : (MAS_DIRECT_BUFFER_SIZE - g_irq_state.used);
+        pos = g_write_pos;
         Enable();
+
+        if (!free_bytes) break;
+        chunk = len - done;
+        if (chunk > free_bytes) chunk = free_bytes;
+        if (chunk > MAS_DIRECT_BUFFER_SIZE - pos) chunk = MAS_DIRECT_BUFFER_SIZE - pos;
+
+        memcpy(g_ring + pos, data + done, chunk);
+
+        Disable();
+        pos += chunk;
+        if (pos >= MAS_DIRECT_BUFFER_SIZE) pos = 0;
+        g_write_pos = pos;
+        g_irq_state.used += chunk;
+        if (g_irq_state.used > MAS_DIRECT_BUFFER_SIZE) g_irq_state.used = MAS_DIRECT_BUFFER_SIZE;
+        Enable();
+
+        done += chunk;
     }
     return done;
 }
@@ -247,7 +270,7 @@ static void start_cia_timer_interrupt(void)
     if (g_interrupt_added) return;
     memset(&g_interrupt, 0, sizeof(g_interrupt));
     g_interrupt.is_Node.ln_Type = NT_INTERRUPT;
-    g_interrupt.is_Node.ln_Pri = 2;
+    g_interrupt.is_Node.ln_Pri = 5;
     g_interrupt.is_Node.ln_Name = (char *)"MASRadio MAS feed";
     g_interrupt.is_Data = (APTR)&g_irq_state;
     g_interrupt.is_Code = (VOID (*)())mas_interrupt_entry;

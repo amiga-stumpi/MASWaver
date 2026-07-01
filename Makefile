@@ -4,7 +4,9 @@ LDFLAGS=-mcrt=nix13
 
 BUILD=build
 TARGET=$(BUILD)/MASRadio
-OBJS=$(BUILD)/main.o $(BUILD)/mas_direct.o $(BUILD)/mas_irq.o
+CORE=$(BUILD)/mcore
+CORE_OBJS=$(BUILD)/main.o $(BUILD)/mas_direct.o $(BUILD)/mas_irq.o $(BUILD)/amitls13_client_stubs.o
+LAUNCHER_OBJS=$(BUILD)/launcher.o
 PLAYLIST=$(BUILD)/playlist.txt
 REF_MAS_INIT=$(BUILD)/MAS-Init
 REF_MAS_PLAY=$(BUILD)/MAS-Play
@@ -12,7 +14,7 @@ REF_MAS_SAMPLE=$(BUILD)/Sound96kbps.MP3
 
 .PHONY: all clean
 
-all: $(TARGET) $(PLAYLIST) $(REF_MAS_INIT) $(REF_MAS_PLAY) $(REF_MAS_SAMPLE)
+all: $(TARGET) $(CORE) $(PLAYLIST) $(REF_MAS_INIT) $(REF_MAS_PLAY) $(REF_MAS_SAMPLE)
 
 $(BUILD):
 	mkdir -p $(BUILD)
@@ -23,8 +25,11 @@ $(BUILD)/%.o: src/%.c | $(BUILD)
 $(BUILD)/%.o: src/%.S | $(BUILD)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-$(TARGET): $(OBJS)
-	$(CC) $(LDFLAGS) -o $@ $(OBJS)
+$(CORE): $(CORE_OBJS)
+	$(CC) $(LDFLAGS) -o $@ $(CORE_OBJS)
+
+$(TARGET): $(LAUNCHER_OBJS)
+	$(CC) $(LDFLAGS) -o $@ $(LAUNCHER_OBJS)
 
 $(PLAYLIST): playlist.txt | $(BUILD)
 	cp playlist.txt $@

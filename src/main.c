@@ -43,9 +43,13 @@
 #define PLAYLIST_LINE_LEN 320
 #define HTTP_BUF_SIZE 2048
 #define STREAM_NET_CHUNK 512
-#define PREBUFFER_BYTES 65536UL
+#define PREBUFFER_BYTES 131072UL
 #define PUMP_INTERVAL_US 20000UL
 #define MAX_PUMP_READS 16
+#define STATUS_UPDATE_TICKS 25
+
+#define AMITLS13F_INSECURE 0x00000001UL
+#define AMITLS13_OK 0L
 
 #define GID_SEARCH 1
 #define GID_SEARCH_BUTTON 2
@@ -55,11 +59,21 @@
 #define GID_NEXT 6
 #define GID_QUIT 7
 
-LONG __stack = 130000;
+LONG __stack = 524288;
 
 struct IntuitionBase *IntuitionBase;
 struct GfxBase *GfxBase;
 struct Library *SocketBase;
+struct Library *AmiTLS13Base;
+struct AmiTLS13Context;
+
+LONG AmiTLS13_Init(void);
+void AmiTLS13_Exit(void);
+struct AmiTLS13Context *AmiTLS13_Connect(const char *host, UWORD port, ULONG flags);
+LONG AmiTLS13_StartTLS(struct AmiTLS13Context *ctx, const char *host);
+LONG AmiTLS13_Write(struct AmiTLS13Context *ctx, const UBYTE *buf, ULONG len);
+LONG AmiTLS13_Read(struct AmiTLS13Context *ctx, UBYTE *buf, ULONG maxlen);
+void AmiTLS13_Close(struct AmiTLS13Context *ctx);
 
 struct StreamEntry {
     char title[TITLE_LEN];
@@ -72,6 +86,8 @@ struct StreamState {
     int fd;
     int active;
     int started;
+    int is_tls;
+    struct AmiTLS13Context *tls_ctx;
 };
 
 static struct Window *g_win;
@@ -91,12 +107,20 @@ struct TimerState {
 
 static struct TimerState g_timer;
 static UBYTE g_net_buf[STREAM_NET_CHUNK];
+static UBYTE g_pending_buf[HTTP_BUF_SIZE];
+static UBYTE g_header_read_buf[HTTP_BUF_SIZE];
+static LONG g_pending_pos;
+static LONG g_pending_len;
 static char g_http_headers[2048];
 static char g_http_path[256];
 static char g_http_location[URL_LEN];
+static char g_http_redirect[URL_LEN];
 static char g_http_current[URL_LEN];
 static char g_status_scratch[STATUS_LEN];
 static ULONG g_total_stream_bytes;
+static UWORD g_status_tick;
+static int g_stack_missing;
+static char g_stream_error[STATUS_LEN];
 
 
 static struct IntuiText g_txt_search_btn = {1,0,JAM1,8,3,0,(UBYTE *)"Reload",0};
@@ -161,8 +185,15 @@ static int parse_url(const char *url, char *host, LONG host_size, char *path, LO
     const char *slash;
     const char *colon;
     LONG host_len;
-    if (!starts_with(url, "http://")) return 0;
-    p = url + 7;
+    if (starts_with(url, "http://")) {
+        p = url + 7;
+        *port = 80;
+    }
+    else if (starts_with(url, "https://")) {
+        p = url + 8;
+        *port = 443;
+    }
+    else return 0;
     slash = strchr(p, '/');
     if (!slash) slash = p + cstrlen(p);
     colon = p;
@@ -171,7 +202,6 @@ static int parse_url(const char *url, char *host, LONG host_size, char *path, LO
     if (host_len <= 0 || host_len >= host_size) return 0;
     memcpy(host, p, host_len);
     host[host_len] = 0;
-    *port = 80;
     if (colon < slash && *colon == ':') {
         LONG v = 0;
         ++colon;
@@ -190,7 +220,11 @@ static int parse_url(const char *url, char *host, LONG host_size, char *path, LO
 static int open_socket_lib(void)
 {
     if (!SocketBase) SocketBase = OpenLibrary((STRPTR)"bsdsocket.library", 4);
-    return SocketBase != 0;
+    if (!SocketBase) {
+        g_stack_missing = 1;
+        return 0;
+    }
+    return 1;
 }
 
 static int connect_http(const char *url, char *path, LONG path_size)
@@ -217,14 +251,34 @@ static int connect_http(const char *url, char *path, LONG path_size)
     return fd;
 }
 
-static int send_all(int fd, const char *buf, LONG len)
+static int ensure_tls_lib(void)
 {
-    LONG done = 0;
-    while (done < len) {
-        LONG n = send(fd, (char *)buf + done, len - done, 0);
-        if (n <= 0) return 0;
-        done += n;
+    if (AmiTLS13Base) return 1;
+    AmiTLS13Base = OpenLibrary((STRPTR)"amitls13.library", 2);
+    if (!AmiTLS13Base) return 0;
+    if (AmiTLS13_Init() != AMITLS13_OK) {
+        CloseLibrary(AmiTLS13Base);
+        AmiTLS13Base = 0;
+        g_stack_missing = 1;
+        return 0;
     }
+    return 1;
+}
+
+static void close_tls_lib(void)
+{
+    if (AmiTLS13Base) {
+        AmiTLS13_Exit();
+        CloseLibrary(AmiTLS13Base);
+        AmiTLS13Base = 0;
+    }
+}
+
+static int tls_library_installed(void)
+{
+    struct Library *lib = OpenLibrary((STRPTR)"amitls13.library", 2);
+    if (!lib) return 0;
+    CloseLibrary(lib);
     return 1;
 }
 
@@ -284,6 +338,8 @@ static void timer_cleanup(void)
     memset(&g_timer, 0, sizeof(g_timer));
 }
 
+static void draw_status(void);
+
 static void set_status(const char *s)
 {
     strncpy(g_status, s, STATUS_LEN - 1);
@@ -301,6 +357,7 @@ static void draw_status(void)
     Move(g_win->RPort, 12, g_win->Height - 18);
     Text(g_win->RPort, (STRPTR)g_status, cstrlen(g_status));
 }
+
 
 static void draw_ui(void)
 {
@@ -354,6 +411,7 @@ static void derive_title_from_url(const char *url, char *title, LONG title_size,
     char tmp[24];
 
     if (starts_with(p, "http://")) p += 7;
+    else if (starts_with(p, "https://")) p += 8;
     slash = strchr(p, '/');
     if (!slash) slash = p + cstrlen(p);
     len = (LONG)(slash - p);
@@ -441,17 +499,67 @@ static void load_playlist(void)
     draw_ui();
 }
 
-static int stream_send_request(int fd, const char *url)
+static LONG stream_read_transport(UBYTE *buf, LONG maxlen)
+{
+    if (g_pending_len > g_pending_pos) {
+        LONG avail = g_pending_len - g_pending_pos;
+        if (avail > maxlen) avail = maxlen;
+        memcpy(buf, g_pending_buf + g_pending_pos, avail);
+        g_pending_pos += avail;
+        if (g_pending_pos >= g_pending_len) {
+            g_pending_pos = 0;
+            g_pending_len = 0;
+        }
+        return avail;
+    }
+    if (g_stream.is_tls) {
+        LONG tls_n;
+        if (!g_stream.tls_ctx) return -1;
+        tls_n = AmiTLS13_Read(g_stream.tls_ctx, buf, (ULONG)maxlen);
+        return tls_n;
+    }
+    return recv(g_stream.fd, buf, maxlen, 0);
+}
+
+static int stream_write_all_transport(const char *buf, LONG len)
+{
+    LONG done = 0;
+    while (done < len) {
+        LONG n;
+        if (g_stream.is_tls) n = AmiTLS13_Write(g_stream.tls_ctx, (const UBYTE *)buf + done, (ULONG)(len - done));
+        else n = send(g_stream.fd, (char *)buf + done, len - done, 0);
+        if (n <= 0) return 0;
+        done += n;
+    }
+    return 1;
+}
+
+static void stream_close_transport(void)
+{
+    g_pending_pos = 0;
+    g_pending_len = 0;
+    if (g_stream.tls_ctx) {
+        AmiTLS13_Close(g_stream.tls_ctx);
+        g_stream.tls_ctx = 0;
+    }
+    if (g_stream.fd >= 0) {
+        CloseSocket(g_stream.fd);
+        g_stream.fd = -1;
+    }
+    g_stream.is_tls = 0;
+}
+
+static int stream_send_request(const char *url)
 {
     char path[256], host[96], req[512];
     UWORD port;
     if (!parse_url(url, host, sizeof(host), path, sizeof(path), &port)) return 0;
     strcpy(req, "GET ");
     strncat(req, path, sizeof(req)-strlen(req)-1);
-    strncat(req, " HTTP/1.0\r\nHost: ", sizeof(req)-strlen(req)-1);
+    strncat(req, " HTTP/1.1\r\nHost: ", sizeof(req)-strlen(req)-1);
     strncat(req, host, sizeof(req)-strlen(req)-1);
-    strncat(req, "\r\nUser-Agent: MASRadio/0.1\r\nIcy-MetaData: 0\r\nConnection: close\r\n\r\n", sizeof(req)-strlen(req)-1);
-    return send_all(fd, req, cstrlen(req));
+    strncat(req, "\r\nUser-Agent: MASRadio/0.1\r\nAccept: */*\r\nConnection: close\r\n\r\n", sizeof(req)-strlen(req)-1);
+    return stream_write_all_transport(req, cstrlen(req));
 }
 
 static int header_line_starts(const char *line, const char *prefix)
@@ -462,21 +570,59 @@ static int header_line_starts(const char *line, const char *prefix)
     return 1;
 }
 
-static int stream_read_headers(int fd, char *headers, LONG headers_size)
+static LONG find_header_end(const char *headers, LONG used)
 {
-    char last4[4] = {0,0,0,0};
-    char c;
-    LONG used = 0;
-    while (used < headers_size - 1) {
-        LONG n = recv(fd, &c, 1, 0);
-        if (n <= 0) return 0;
-        headers[used++] = c;
-        headers[used] = 0;
-        last4[0]=last4[1]; last4[1]=last4[2]; last4[2]=last4[3]; last4[3]=c;
-        if (last4[0]=='\r' && last4[1]=='\n' && last4[2]=='\r' && last4[3]=='\n') return 1;
-        if (last4[2]=='\n' && last4[3]=='\n') return 1;
+    LONG i;
+    for (i = 0; i + 3 < used; ++i) {
+        if (headers[i] == '\r' && headers[i + 1] == '\n' &&
+            headers[i + 2] == '\r' && headers[i + 3] == '\n') {
+            return i + 4;
+        }
     }
-    return 0;
+    for (i = 0; i + 1 < used; ++i) {
+        if (headers[i] == '\n' && headers[i + 1] == '\n') return i + 2;
+    }
+    return -1;
+}
+
+static int stream_read_headers(char *headers, LONG headers_size)
+{
+    UBYTE *read_buf = g_header_read_buf;
+    LONG used = 0;
+    int ok = 0;
+
+    if (!headers || headers_size <= 1) return 0;
+
+    headers[0] = 0;
+    g_pending_pos = 0;
+    g_pending_len = 0;
+    while (used < headers_size - 1) {
+        LONG room = headers_size - 1 - used;
+        LONG n;
+        LONG end;
+        if (room > STREAM_NET_CHUNK) room = STREAM_NET_CHUNK;
+        room &= ~1L;
+        if (room <= 0) break;
+        n = stream_read_transport(read_buf, room);
+        if (n <= 0) break;
+        memcpy(headers + used, read_buf, n);
+        used += n;
+        headers[used] = 0;
+        end = find_header_end(headers, used);
+        if (end >= 0) {
+            LONG extra = used - end;
+            if (extra > 0) {
+                if (extra > HTTP_BUF_SIZE) extra = HTTP_BUF_SIZE;
+                memcpy(g_pending_buf, headers + end, extra);
+                g_pending_pos = 0;
+                g_pending_len = extra;
+            }
+            headers[end] = 0;
+            ok = 1;
+            break;
+        }
+    }
+    return ok;
 }
 
 static int stream_status_code(const char *headers)
@@ -491,6 +637,56 @@ static int stream_status_code(const char *headers)
         ++p;
     }
     return code;
+}
+
+static LONG stream_content_length(const char *headers)
+{
+    const char *p = headers;
+    while (*p) {
+        const char *line = p;
+        while (*p && *p != '\n') ++p;
+        if (*p == '\n') ++p;
+        if (header_line_starts(line, "Content-Length:")) {
+            LONG v = 0;
+            line += 15;
+            while (*line == ' ' || *line == '\t') ++line;
+            while (*line >= '0' && *line <= '9') {
+                v = (v * 10) + (*line - '0');
+                ++line;
+            }
+            return v;
+        }
+    }
+    return -1;
+}
+
+static void stream_drain_response_body(const char *headers)
+{
+    LONG len = stream_content_length(headers);
+    UBYTE tmp[128];
+    if (len <= 0) {
+        g_pending_pos = 0;
+        g_pending_len = 0;
+        return;
+    }
+    while (len > 0 && g_pending_len > g_pending_pos) {
+        LONG avail = g_pending_len - g_pending_pos;
+        if (avail > len) avail = len;
+        g_pending_pos += avail;
+        len -= avail;
+        if (g_pending_pos >= g_pending_len) {
+            g_pending_pos = 0;
+            g_pending_len = 0;
+        }
+    }
+    while (len > 0) {
+        LONG want = len > (LONG)sizeof(tmp) ? (LONG)sizeof(tmp) : len;
+        LONG n = stream_read_transport(tmp, want);
+        if (n <= 0) break;
+        len -= n;
+    }
+    g_pending_pos = 0;
+    g_pending_len = 0;
 }
 
 static int stream_find_location(const char *headers, char *out, LONG out_size)
@@ -514,33 +710,156 @@ static int stream_find_location(const char *headers, char *out, LONG out_size)
     return 0;
 }
 
+static void append_port(char *out, LONG out_size, UWORD port)
+{
+    char tmp[8];
+    char b[8];
+    UWORD i = 0;
+    UWORD p = 0;
+    UWORD v = port;
+
+    if (!out || out_size <= 0) return;
+    b[p++] = ':';
+    do {
+        tmp[i++] = (char)('0' + (v % 10));
+        v = (UWORD)(v / 10);
+    } while (v && i < sizeof(tmp));
+    while (i > 0 && (ULONG)(p + 1) < sizeof(b)) b[p++] = tmp[--i];
+    b[p] = 0;
+    strncat(out, b, out_size - strlen(out) - 1);
+}
+
+static int stream_make_redirect_url(const char *base_url, const char *location, char *out, LONG out_size)
+{
+    char host[96];
+    char path[256];
+    UWORD port;
+
+    if (!location || !out || out_size <= 0) return 0;
+    out[0] = 0;
+    if (starts_with(location, "http://") || starts_with(location, "https://")) {
+        strncpy(out, location, out_size - 1);
+        out[out_size - 1] = 0;
+        return 1;
+    }
+    if (!parse_url(base_url, host, sizeof(host), path, sizeof(path), &port)) return 0;
+
+    if (starts_with(base_url, "https://")) strcpy(out, "https://");
+    else strcpy(out, "http://");
+    strncat(out, host, out_size - strlen(out) - 1);
+    if ((starts_with(base_url, "https://") && port != 443) ||
+        (starts_with(base_url, "http://") && port != 80)) {
+        append_port(out, out_size, port);
+    }
+    if (location[0] == '/') {
+        strncat(out, location, out_size - strlen(out) - 1);
+    }
+    else {
+        strncat(out, "/", out_size - strlen(out) - 1);
+        strncat(out, location, out_size - strlen(out) - 1);
+    }
+    return out[0] != 0;
+}
+
+static void set_stream_error(const char *s)
+{
+    strncpy(g_stream_error, s, STATUS_LEN - 1);
+    g_stream_error[STATUS_LEN - 1] = 0;
+}
+
+static void set_http_status_error(const char *headers, int is_tls)
+{
+    const char *p = headers;
+    char line[72];
+    LONG i = 0;
+
+    while (*p && *p != '\r' && *p != '\n' && i < (LONG)sizeof(line) - 1) {
+        line[i++] = *p++;
+    }
+    line[i] = 0;
+    if (!line[0]) {
+        set_stream_error("HTTP status not OK");
+        return;
+    }
+    if (is_tls) {
+        strcpy(g_stream_error, "HTTPS ");
+        strncat(g_stream_error, line, sizeof(g_stream_error) - strlen(g_stream_error) - 1);
+    }
+    else {
+        strncpy(g_stream_error, line, sizeof(g_stream_error) - 1);
+        g_stream_error[sizeof(g_stream_error) - 1] = 0;
+    }
+}
+
 static int stream_open_direct(const char *url)
 {
     int redirect;
+    set_stream_error("Stream connect/header failed");
     strncpy(g_http_current, url, sizeof(g_http_current) - 1);
     g_http_current[sizeof(g_http_current) - 1] = 0;
     for (redirect = 0; redirect < 3; ++redirect) {
-        int fd;
         int code;
-        if (!starts_with(g_http_current, "http://")) return -1;
-        fd = connect_http(g_http_current, g_http_path, sizeof(g_http_path));
-        if (fd < 0) return -1;
-        if (!stream_send_request(fd, g_http_current) || !stream_read_headers(fd, g_http_headers, sizeof(g_http_headers))) {
-            CloseSocket(fd);
+        char host[96];
+        UWORD port;
+        stream_close_transport();
+        if (!parse_url(g_http_current, host, sizeof(host), g_http_path, sizeof(g_http_path), &port)) { set_stream_error("Unsupported stream URL"); return -1; }
+        if (starts_with(g_http_current, "https://")) {
+            set_status("Opening HTTPS..."); draw_status();
+            if (!ensure_tls_lib()) {
+                set_stream_error("Please install AmiTLS13 Library for https:// support");
+                return -1;
+            }
+            g_stream.is_tls = 1;
+            set_status("Connecting HTTPS..."); draw_status();
+            g_stream.tls_ctx = AmiTLS13_Connect(host, port, AMITLS13F_INSECURE);
+            if (!g_stream.tls_ctx) {
+                set_stream_error("HTTPS TCP connect failed");
+                return -1;
+            }
+            set_status("Starting TLS..."); draw_status();
+            if (AmiTLS13_StartTLS(g_stream.tls_ctx, host) != AMITLS13_OK) {
+                stream_close_transport();
+                set_stream_error("HTTPS TLS start failed");
+                return -1;
+            }
+        }
+        else {
+            g_stream.is_tls = 0;
+            g_stream.fd = connect_http(g_http_current, g_http_path, sizeof(g_http_path));
+            if (g_stream.fd < 0) { set_stream_error("HTTP socket connect failed"); return -1; }
+        }
+        set_status("Requesting stream..."); draw_status();
+        if (!stream_send_request(g_http_current)) {
+            stream_close_transport();
+            set_stream_error("HTTP request send failed");
+            return -1;
+        }
+        set_status("Reading stream header..."); draw_status();
+        if (!stream_read_headers(g_http_headers, sizeof(g_http_headers))) {
+            stream_close_transport();
+            set_stream_error("HTTP header read failed");
             return -1;
         }
         code = stream_status_code(g_http_headers);
+        
         if ((code == 301 || code == 302 || code == 303 || code == 307 || code == 308) &&
-            stream_find_location(g_http_headers, g_http_location, sizeof(g_http_location))) {
-            CloseSocket(fd);
-            strncpy(g_http_current, g_http_location, sizeof(g_http_current) - 1);
+            stream_find_location(g_http_headers, g_http_location, sizeof(g_http_location)) &&
+            stream_make_redirect_url(g_http_current, g_http_location, g_http_redirect, sizeof(g_http_redirect))) {
+            
+            stream_drain_response_body(g_http_headers);
+            
+            stream_close_transport();
+            set_status("Following redirect..."); draw_status();
+            strncpy(g_http_current, g_http_redirect, sizeof(g_http_current) - 1);
             g_http_current[sizeof(g_http_current) - 1] = 0;
             continue;
         }
-        if (code >= 200 && code < 300) return fd;
-        CloseSocket(fd);
+        if (code >= 200 && code < 300) return 0;
+        stream_close_transport();
+        set_http_status_error(g_http_headers, starts_with(g_http_current, "https://"));
         return -1;
     }
+    set_stream_error("Stream redirect failed");
     return -1;
 }
 
@@ -548,10 +867,10 @@ static void stop_stream(void)
 {
     timer_stop();
     mas_direct_stop();
-    if (g_stream.active && g_stream.fd >= 0) CloseSocket(g_stream.fd);
-    g_stream.fd = -1;
+    if (g_stream.active) stream_close_transport();
     g_stream.active = 0;
     g_stream.started = 0;
+    g_status_tick = 0;
     set_status("Stopped");
     draw_ui();
 }
@@ -561,9 +880,9 @@ static int stream_pump_socket(void)
     LONG reads = 0;
     int got_data = 0;
 
-    if (!g_stream.active || g_stream.fd < 0) return 0;
+    if (!g_stream.active || (!g_stream.is_tls && g_stream.fd < 0) || (g_stream.is_tls && !g_stream.tls_ctx)) return 0;
     while (reads < MAX_PUMP_READS && mas_direct_buffer_free() >= STREAM_NET_CHUNK) {
-        LONG n = recv(g_stream.fd, g_net_buf, STREAM_NET_CHUNK, 0);
+        LONG n = stream_read_transport(g_net_buf, STREAM_NET_CHUNK);
         if (n <= 0) break;
         if (mas_direct_write(g_net_buf, (ULONG)n) != (ULONG)n) break;
         g_total_stream_bytes += (ULONG)n;
@@ -577,11 +896,11 @@ static int stream_prebuffer(void)
 {
     g_total_stream_bytes = 0;
     while (mas_direct_buffer_used() < PREBUFFER_BYTES) {
-        LONG n = recv(g_stream.fd, g_net_buf, STREAM_NET_CHUNK, 0);
+        LONG n = stream_read_transport(g_net_buf, STREAM_NET_CHUNK);
         if (n <= 0) break;
         if (mas_direct_write(g_net_buf, (ULONG)n) != (ULONG)n) return 0;
         g_total_stream_bytes += (ULONG)n;
-        if ((g_total_stream_bytes & 0x3fffUL) == 0) {
+        if ((g_total_stream_bytes & 0x7fffUL) == 0) {
             sprintf(g_status_scratch, "Prebuffering %ld/%ld KB...", (LONG)(mas_direct_buffer_used() / 1024UL), (LONG)(PREBUFFER_BYTES / 1024UL));
             set_status(g_status_scratch);
             draw_status();
@@ -590,28 +909,34 @@ static int stream_prebuffer(void)
     return mas_direct_buffer_used() >= MAS_DIRECT_NEED_PREBUFFER;
 }
 
-static void update_play_status(void)
-{
-    sprintf(g_status_scratch, "Playing - buffer %ld KB", (LONG)(mas_direct_buffer_used() / 1024UL));
-    set_status(g_status_scratch);
-    draw_status();
-}
-
 static void play_selected(void)
 {
     if (g_selected < 0 || g_selected >= g_result_count) { set_status("No stream selected"); draw_ui(); return; }
-    if (starts_with(g_results[g_selected].url, "https://")) { set_status("HTTPS stream playback not installed yet"); draw_ui(); return; }
-    if (!starts_with(g_results[g_selected].url, "http://")) { set_status("Unsupported stream URL"); draw_ui(); return; }
+    if (!starts_with(g_results[g_selected].url, "http://") && !starts_with(g_results[g_selected].url, "https://")) { set_status("Unsupported stream URL"); draw_ui(); return; }
 
     stop_stream();
-    g_stream.fd = stream_open_direct(g_results[g_selected].url);
-    if (g_stream.fd < 0) { set_status("Stream connect/header failed"); draw_ui(); return; }
-
-    if (!mas_direct_init()) {
-        set_status("MAS direct init failed");
+    set_status("Connecting stream...");
+    draw_status();
+    g_stack_missing = 0;
+    g_stream.fd = -1;
+    g_stream.tls_ctx = 0;
+    g_stream.is_tls = 0;
+    if (stream_open_direct(g_results[g_selected].url) < 0) {
+        if (g_stack_missing) {
+            set_status("Network stack is not running");
+        } else if (starts_with(g_results[g_selected].url, "https://") && !AmiTLS13Base) {
+            set_status("Please install AmiTLS13 Library for https:// support");
+        } else {
+            set_status(g_stream_error[0] ? g_stream_error : "Stream connect/header failed");
+        }
         draw_ui();
-        CloseSocket(g_stream.fd);
-        g_stream.fd = -1;
+        return;
+    }
+
+    if (!mas_direct_prepare()) {
+        set_status("MAS buffer init failed");
+        draw_ui();
+        stream_close_transport();
         return;
     }
 
@@ -621,21 +946,23 @@ static void play_selected(void)
     draw_status();
 
     if (!stream_prebuffer()) {
-        CloseSocket(g_stream.fd);
-        g_stream.fd = -1;
+        stream_close_transport();
         g_stream.active = 0;
         set_status("Stream prebuffer failed");
         draw_ui();
         return;
     }
 
-    {
+    if (!g_stream.is_tls && g_stream.fd >= 0) {
         LONG nonblock = 1;
         IoctlSocket(g_stream.fd, FIONBIO, &nonblock);
     }
+    mas_direct_reset();
     mas_direct_start();
     g_stream.started = 1;
-    update_play_status();
+    g_status_tick = 0;
+    set_status("Playing");
+    draw_status();
     timer_start();
 }
 
@@ -674,6 +1001,7 @@ int main(void)
     ULONG sigmask;
     int done = 0;
     g_stream.fd = -1;
+    g_stream.tls_ctx = 0;
     IntuitionBase = (struct IntuitionBase *)OpenLibrary((STRPTR)"intuition.library", 0);
     GfxBase = (struct GfxBase *)OpenLibrary((STRPTR)"graphics.library", 0);
     if (!IntuitionBase || !GfxBase) goto out;
@@ -681,6 +1009,10 @@ int main(void)
     if (!open_gui()) goto out;
     sigmask = (1UL << g_win->UserPort->mp_SigBit) | g_timer.sigmask;
     load_playlist();
+    if (!tls_library_installed()) {
+        set_status("Fuer HTTPS:// Streams bitte AmiTLS13 >= 2.0 installieren...");
+        draw_status();
+    }
     while (!done) {
         ULONG got_sig = Wait(sigmask);
         if ((got_sig & g_timer.sigmask) && timer_drain()) {
@@ -688,14 +1020,12 @@ int main(void)
                 stream_pump_socket();
                 if (mas_direct_had_underrun()) {
                     mas_direct_stop();
-                    if (g_stream.fd >= 0) CloseSocket(g_stream.fd);
-                    g_stream.fd = -1;
+                    stream_close_transport();
                     g_stream.active = 0;
                     g_stream.started = 0;
                     set_status("Buffer underrun - stream stopped");
                     draw_status();
                 } else {
-                    update_play_status();
                     timer_start();
                 }
             }
@@ -733,6 +1063,7 @@ out:
     mas_direct_shutdown();
     if (g_win) CloseWindow(g_win);
     timer_cleanup();
+    close_tls_lib();
     if (SocketBase) CloseLibrary(SocketBase);
     if (GfxBase) CloseLibrary((struct Library *)GfxBase);
     if (IntuitionBase) CloseLibrary((struct Library *)IntuitionBase);
