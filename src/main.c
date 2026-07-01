@@ -406,7 +406,7 @@ static void draw_ui(void)
     SetBPen(g_win->RPort, 0);
     SetDrMd(g_win->RPort, JAM1);
     Move(g_win->RPort, 12, 52);
-    Text(g_win->RPort, (STRPTR)"Available Streams", 25);
+    Text(g_win->RPort, (STRPTR)"Available Streams", cstrlen("Available Streams"));
     for (i = 0; i < MAX_RESULTS; ++i) {
         LONG idx = i;
         Move(g_win->RPort, 16, 72 + i * 11);
