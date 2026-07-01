@@ -29,18 +29,21 @@
 #include "mas_direct.h"
 
 
-#define APP_TITLE "MASRadio v0.1"
-#define VERSION_TEXT "MASRadio v0.1 by Marcel Jaehne (c)2026"
+#define APP_TITLE "MASWaver v0.1"
+#define VERSION_TEXT "MASWaver v0.1 by Marcel Jaehne (c)2026"
 
 #define WIN_W 520
-#define WIN_H 190
+#define WIN_H 220
 #define MAX_RESULTS 8
 #define TITLE_LEN 64
 #define URL_LEN 192
 #define GENRE_LEN 48
-#define STATUS_LEN 96
-#define PLAYLIST_FILE "playlist.txt"
-#define PLAYLIST_LINE_LEN 320
+#define STATUS_LEN 160
+#define ICY_TEXT_LEN 96
+#define ICY_GENRE_LEN 96
+#define ICY_META_BUF 256
+#define STREAMS_FILE "streams.txt"
+#define STREAMS_LINE_LEN 320
 #define HTTP_BUF_SIZE 2048
 #define STREAM_NET_CHUNK 512
 #define PREBUFFER_BYTES 131072UL
@@ -121,6 +124,17 @@ static ULONG g_total_stream_bytes;
 static UWORD g_status_tick;
 static int g_stack_missing;
 static char g_stream_error[STATUS_LEN];
+static LONG g_icy_metaint;
+static LONG g_icy_audio_left;
+static LONG g_icy_meta_remaining;
+static LONG g_icy_meta_pos;
+static UBYTE g_icy_need_len;
+static UBYTE g_icy_dirty;
+static char g_icy_name[ICY_TEXT_LEN];
+static char g_icy_bitrate[16];
+static char g_icy_genre[ICY_GENRE_LEN];
+static char g_icy_title[ICY_TEXT_LEN];
+static char g_icy_meta_buf[ICY_META_BUF];
 
 
 static struct IntuiText g_txt_search_btn = {1,0,JAM1,8,3,0,(UBYTE *)"Reload",0};
@@ -348,14 +362,36 @@ static void set_status(const char *s)
 
 static void draw_status(void)
 {
+    char line[180];
+
     if (!g_win) return;
     SetAPen(g_win->RPort, 0);
-    RectFill(g_win->RPort, 8, g_win->Height - 30, g_win->Width - 12, g_win->Height - 12);
+    RectFill(g_win->RPort, 8, g_win->Height - 62, g_win->Width - 12, g_win->Height - 12);
     SetAPen(g_win->RPort, 1);
     SetBPen(g_win->RPort, 0);
     SetDrMd(g_win->RPort, JAM1);
-    Move(g_win->RPort, 12, g_win->Height - 18);
+    Move(g_win->RPort, 12, g_win->Height - 51);
     Text(g_win->RPort, (STRPTR)g_status, cstrlen(g_status));
+
+    line[0] = 0;
+    strncat(line, "Name: ", sizeof(line) - strlen(line) - 1);
+    strncat(line, g_icy_name[0] ? g_icy_name : "-", sizeof(line) - strlen(line) - 1);
+    strncat(line, "  Bitrate: ", sizeof(line) - strlen(line) - 1);
+    strncat(line, g_icy_bitrate[0] ? g_icy_bitrate : "-", sizeof(line) - strlen(line) - 1);
+    Move(g_win->RPort, 12, g_win->Height - 40);
+    Text(g_win->RPort, (STRPTR)line, cstrlen(line));
+
+    line[0] = 0;
+    strncat(line, "Genre: ", sizeof(line) - strlen(line) - 1);
+    strncat(line, g_icy_genre[0] ? g_icy_genre : "-", sizeof(line) - strlen(line) - 1);
+    Move(g_win->RPort, 12, g_win->Height - 29);
+    Text(g_win->RPort, (STRPTR)line, cstrlen(line));
+
+    line[0] = 0;
+    strncat(line, "StreamTitle: ", sizeof(line) - strlen(line) - 1);
+    strncat(line, g_icy_title[0] ? g_icy_title : "-", sizeof(line) - strlen(line) - 1);
+    Move(g_win->RPort, 12, g_win->Height - 18);
+    Text(g_win->RPort, (STRPTR)line, cstrlen(line));
 }
 
 
@@ -365,12 +401,12 @@ static void draw_ui(void)
     char line[160];
     if (!g_win) return;
     SetAPen(g_win->RPort, 0);
-    RectFill(g_win->RPort, 8, 38, g_win->Width - 12, g_win->Height - 12);
+    RectFill(g_win->RPort, 8, 38, g_win->Width - 12, g_win->Height - 64);
     SetAPen(g_win->RPort, 1);
     SetBPen(g_win->RPort, 0);
     SetDrMd(g_win->RPort, JAM1);
     Move(g_win->RPort, 12, 52);
-    Text(g_win->RPort, (STRPTR)"Streams from playlist.txt", 25);
+    Text(g_win->RPort, (STRPTR)"Streams from streams.txt", 25);
     for (i = 0; i < MAX_RESULTS; ++i) {
         LONG idx = i;
         Move(g_win->RPort, 16, 72 + i * 11);
@@ -465,21 +501,21 @@ static int parse_playlist_line(char *line, struct StreamEntry *out, LONG index)
 static void load_playlist(void)
 {
     BPTR f;
-    char line[PLAYLIST_LINE_LEN];
+    char line[STREAMS_LINE_LEN];
     LONG pos = 0;
     char c;
     LONG got;
 
     clear_playlist();
-    f = Open((STRPTR)PLAYLIST_FILE, MODE_OLDFILE);
+    f = Open((STRPTR)STREAMS_FILE, MODE_OLDFILE);
     if (!f) {
-        set_status("playlist.txt not found");
+        set_status("streams.txt not found");
         draw_ui();
         return;
     }
 
     while (g_result_count < MAX_RESULTS && (got = Read(f, &c, 1)) > 0) {
-        if (c == '\n' || pos >= PLAYLIST_LINE_LEN - 1) {
+        if (c == '\n' || pos >= STREAMS_LINE_LEN - 1) {
             line[pos] = 0;
             if (parse_playlist_line(line, &g_results[g_result_count], g_result_count)) ++g_result_count;
             pos = 0;
@@ -494,7 +530,7 @@ static void load_playlist(void)
     }
     Close(f);
 
-    if (g_result_count <= 0) set_status("No streams in playlist.txt");
+    if (g_result_count <= 0) set_status("No streams in streams.txt");
     else set_status("Playlist loaded");
     draw_ui();
 }
@@ -558,7 +594,7 @@ static int stream_send_request(const char *url)
     strncat(req, path, sizeof(req)-strlen(req)-1);
     strncat(req, " HTTP/1.1\r\nHost: ", sizeof(req)-strlen(req)-1);
     strncat(req, host, sizeof(req)-strlen(req)-1);
-    strncat(req, "\r\nUser-Agent: MASRadio/0.1\r\nAccept: */*\r\nConnection: close\r\n\r\n", sizeof(req)-strlen(req)-1);
+    strncat(req, "\r\nUser-Agent: MASWaver/0.1\r\nAccept: */*\r\nIcy-MetaData: 1\r\nConnection: close\r\n\r\n", sizeof(req)-strlen(req)-1);
     return stream_write_all_transport(req, cstrlen(req));
 }
 
@@ -623,6 +659,166 @@ static int stream_read_headers(char *headers, LONG headers_size)
         }
     }
     return ok;
+}
+
+static void icy_clear(void)
+{
+    g_icy_metaint = 0;
+    g_icy_audio_left = 0;
+    g_icy_meta_remaining = 0;
+    g_icy_meta_pos = 0;
+    g_icy_need_len = 1;
+    g_icy_dirty = 1;
+    g_icy_name[0] = 0;
+    g_icy_bitrate[0] = 0;
+    g_icy_genre[0] = 0;
+    g_icy_title[0] = 0;
+    memset(g_icy_meta_buf, 0, sizeof(g_icy_meta_buf));
+}
+
+static int header_get_value(const char *headers, const char *prefix, char *out, LONG out_size)
+{
+    const char *p = headers;
+    if (out_size > 0) out[0] = 0;
+    while (*p) {
+        const char *line = p;
+        const char *end;
+        while (*p && *p != '\n') ++p;
+        end = p;
+        if (*p == '\n') ++p;
+        if (header_line_starts(line, prefix)) {
+            line += cstrlen(prefix);
+            while (line < end && (*line == ' ' || *line == '\t')) ++line;
+            while (end > line && (end[-1] == '\r' || end[-1] == '\n' || end[-1] == ' ' || end[-1] == '\t')) --end;
+            copy_trim(out, out_size, line, (LONG)(end - line));
+            return out[0] != 0;
+        }
+    }
+    return 0;
+}
+
+static LONG header_get_long(const char *headers, const char *prefix)
+{
+    char tmp[24];
+    char *p;
+    LONG v = 0;
+    if (!header_get_value(headers, prefix, tmp, sizeof(tmp))) return 0;
+    p = tmp;
+    while (*p >= '0' && *p <= '9') {
+        v = (v * 10) + (*p - '0');
+        ++p;
+    }
+    return v;
+}
+
+static void icy_parse_headers(const char *headers)
+{
+    LONG metaint;
+
+    g_icy_name[0] = 0;
+    g_icy_bitrate[0] = 0;
+    g_icy_genre[0] = 0;
+    g_icy_title[0] = 0;
+    header_get_value(headers, "icy-name:", g_icy_name, sizeof(g_icy_name));
+    header_get_value(headers, "icy-br:", g_icy_bitrate, sizeof(g_icy_bitrate));
+    header_get_value(headers, "icy-genre:", g_icy_genre, sizeof(g_icy_genre));
+    metaint = header_get_long(headers, "icy-metaint:");
+    if (metaint > 0 && metaint < 262144L) {
+        g_icy_metaint = metaint;
+        g_icy_audio_left = metaint;
+    } else {
+        g_icy_metaint = 0;
+        g_icy_audio_left = 0;
+    }
+    g_icy_meta_remaining = 0;
+    g_icy_meta_pos = 0;
+    g_icy_need_len = 1;
+    g_icy_dirty = 1;
+}
+
+static void icy_update_title_from_block(void)
+{
+    const char *key = "StreamTitle='";
+    char *p;
+    char *end;
+    char title[ICY_TEXT_LEN];
+
+    g_icy_meta_buf[sizeof(g_icy_meta_buf) - 1] = 0;
+    p = strstr(g_icy_meta_buf, key);
+    if (!p) return;
+    p += cstrlen(key);
+    end = strchr(p, '\'');
+    if (!end || end <= p) return;
+    copy_trim(title, sizeof(title), p, (LONG)(end - p));
+    if (title[0] && strcmp(title, g_icy_title) != 0) {
+        strncpy(g_icy_title, title, sizeof(g_icy_title) - 1);
+        g_icy_title[sizeof(g_icy_title) - 1] = 0;
+        g_icy_dirty = 1;
+    }
+}
+
+static int icy_consume_metadata(void)
+{
+    UBYTE tmp[64];
+
+    while (1) {
+        if (g_icy_need_len) {
+            UBYTE len_byte;
+            LONG n = stream_read_transport(&len_byte, 1);
+            if (n <= 0) return 0;
+            g_icy_meta_remaining = ((LONG)len_byte) * 16L;
+            g_icy_meta_pos = 0;
+            memset(g_icy_meta_buf, 0, sizeof(g_icy_meta_buf));
+            g_icy_need_len = 0;
+            if (g_icy_meta_remaining <= 0) {
+                g_icy_need_len = 1;
+                g_icy_audio_left = g_icy_metaint;
+                return 1;
+            }
+        }
+
+        while (g_icy_meta_remaining > 0) {
+            LONG want = g_icy_meta_remaining;
+            LONG n;
+            if (want > (LONG)sizeof(tmp)) want = sizeof(tmp);
+            n = stream_read_transport(tmp, want);
+            if (n <= 0) return 0;
+            if (g_icy_meta_pos < (LONG)sizeof(g_icy_meta_buf) - 1) {
+                LONG copy = n;
+                if (copy > ((LONG)sizeof(g_icy_meta_buf) - 1 - g_icy_meta_pos)) {
+                    copy = (LONG)sizeof(g_icy_meta_buf) - 1 - g_icy_meta_pos;
+                }
+                memcpy(g_icy_meta_buf + g_icy_meta_pos, tmp, copy);
+                g_icy_meta_pos += copy;
+                g_icy_meta_buf[g_icy_meta_pos] = 0;
+            }
+            g_icy_meta_remaining -= n;
+        }
+
+        icy_update_title_from_block();
+        g_icy_need_len = 1;
+        g_icy_audio_left = g_icy_metaint;
+        return 1;
+    }
+}
+
+static LONG stream_read_audio(UBYTE *buf, LONG maxlen)
+{
+    while (g_icy_metaint > 0) {
+        LONG want;
+        LONG n;
+        if (g_icy_audio_left <= 0) {
+            if (!icy_consume_metadata()) return 0;
+            continue;
+        }
+        want = maxlen;
+        if (want > g_icy_audio_left) want = g_icy_audio_left;
+        n = stream_read_transport(buf, want);
+        if (n <= 0) return n;
+        g_icy_audio_left -= n;
+        return n;
+    }
+    return stream_read_transport(buf, maxlen);
 }
 
 static int stream_status_code(const char *headers)
@@ -802,6 +998,7 @@ static int stream_open_direct(const char *url)
         char host[96];
         UWORD port;
         stream_close_transport();
+        icy_clear();
         if (!parse_url(g_http_current, host, sizeof(host), g_http_path, sizeof(g_http_path), &port)) { set_stream_error("Unsupported stream URL"); return -1; }
         if (starts_with(g_http_current, "https://")) {
             set_status("Opening HTTPS..."); draw_status();
@@ -841,6 +1038,8 @@ static int stream_open_direct(const char *url)
             return -1;
         }
         code = stream_status_code(g_http_headers);
+        icy_parse_headers(g_http_headers);
+        draw_status();
         
         if ((code == 301 || code == 302 || code == 303 || code == 307 || code == 308) &&
             stream_find_location(g_http_headers, g_http_location, sizeof(g_http_location)) &&
@@ -868,6 +1067,7 @@ static void stop_stream(void)
     timer_stop();
     mas_direct_stop();
     if (g_stream.active) stream_close_transport();
+    icy_clear();
     g_stream.active = 0;
     g_stream.started = 0;
     g_status_tick = 0;
@@ -882,10 +1082,14 @@ static int stream_pump_socket(void)
 
     if (!g_stream.active || (!g_stream.is_tls && g_stream.fd < 0) || (g_stream.is_tls && !g_stream.tls_ctx)) return 0;
     while (reads < MAX_PUMP_READS && mas_direct_buffer_free() >= STREAM_NET_CHUNK) {
-        LONG n = stream_read_transport(g_net_buf, STREAM_NET_CHUNK);
+        LONG n = stream_read_audio(g_net_buf, STREAM_NET_CHUNK);
         if (n <= 0) break;
         if (mas_direct_write(g_net_buf, (ULONG)n) != (ULONG)n) break;
         g_total_stream_bytes += (ULONG)n;
+        if (g_icy_dirty) {
+            g_icy_dirty = 0;
+            draw_status();
+        }
         got_data = 1;
         ++reads;
     }
@@ -896,10 +1100,14 @@ static int stream_prebuffer(void)
 {
     g_total_stream_bytes = 0;
     while (mas_direct_buffer_used() < PREBUFFER_BYTES) {
-        LONG n = stream_read_transport(g_net_buf, STREAM_NET_CHUNK);
+        LONG n = stream_read_audio(g_net_buf, STREAM_NET_CHUNK);
         if (n <= 0) break;
         if (mas_direct_write(g_net_buf, (ULONG)n) != (ULONG)n) return 0;
         g_total_stream_bytes += (ULONG)n;
+        if (g_icy_dirty) {
+            g_icy_dirty = 0;
+            draw_status();
+        }
         if ((g_total_stream_bytes & 0x7fffUL) == 0) {
             sprintf(g_status_scratch, "Prebuffering %ld/%ld KB...", (LONG)(mas_direct_buffer_used() / 1024UL), (LONG)(PREBUFFER_BYTES / 1024UL));
             set_status(g_status_scratch);

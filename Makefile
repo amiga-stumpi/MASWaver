@@ -3,15 +3,15 @@ CFLAGS=-Os -Wall -Wextra -fomit-frame-pointer -mcrt=nix13 -fno-builtin -DAMIGA_O
 LDFLAGS=-mcrt=nix13
 
 BUILD=build
-TARGET=$(BUILD)/MASRadio
-CORE=$(BUILD)/mcore
+TARGET=$(BUILD)/MASWaver
+CORE=$(BUILD)/mwcore
 CORE_OBJS=$(BUILD)/main.o $(BUILD)/mas_direct.o $(BUILD)/mas_irq.o $(BUILD)/amitls13_client_stubs.o
 LAUNCHER_OBJS=$(BUILD)/launcher.o
-PLAYLIST=$(BUILD)/playlist.txt
+STREAMS=$(BUILD)/streams.txt
 
 .PHONY: all clean
 
-all: $(TARGET) $(CORE) $(PLAYLIST)
+all: $(TARGET) $(CORE) $(STREAMS)
 
 $(BUILD):
 	mkdir -p $(BUILD)
@@ -28,8 +28,8 @@ $(CORE): $(CORE_OBJS)
 $(TARGET): $(LAUNCHER_OBJS)
 	$(CC) $(LDFLAGS) -o $@ $(LAUNCHER_OBJS)
 
-$(PLAYLIST): playlist.txt | $(BUILD)
-	cp playlist.txt $@
+$(STREAMS): streams.txt | $(BUILD)
+	cp streams.txt $@
 
 clean:
 	rm -rf $(BUILD)

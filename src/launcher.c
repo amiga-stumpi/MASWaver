@@ -20,12 +20,12 @@ int main(void)
 {
     LONG ok;
     if (amitls_installed()) {
-        ok = Execute((STRPTR)"stack 262144\nmcore\n", 0, 0);
+        ok = Execute((STRPTR)"stack 262144\nmwcore\n", 0, 0);
     } else {
-        ok = Execute((STRPTR)"stack 65000\nmcore\n", 0, 0);
+        ok = Execute((STRPTR)"stack 65000\nmwcore\n", 0, 0);
     }
     if (!ok) {
-        FPuts(Output(), (STRPTR)"MASRadio: cannot execute mcore\n");
+        FPuts(Output(), (STRPTR)"MASWaver: cannot execute mwcore\n");
         return 20;
     }
     return 0;

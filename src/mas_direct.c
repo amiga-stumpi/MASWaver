@@ -271,7 +271,7 @@ static void start_cia_timer_interrupt(void)
     memset(&g_interrupt, 0, sizeof(g_interrupt));
     g_interrupt.is_Node.ln_Type = NT_INTERRUPT;
     g_interrupt.is_Node.ln_Pri = 5;
-    g_interrupt.is_Node.ln_Name = (char *)"MASRadio MAS feed";
+    g_interrupt.is_Node.ln_Name = (char *)"MASWaver MAS feed";
     g_interrupt.is_Data = (APTR)&g_irq_state;
     g_interrupt.is_Code = (VOID (*)())mas_interrupt_entry;
     AddIntServer(MAS_INTERRUPT_NUM, &g_interrupt);

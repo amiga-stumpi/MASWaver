@@ -1,7 +1,7 @@
 build/
 *.o
 *.log
-MASRadioStream.mp3
+MASWaverStream.mp3
 
 MAS-PlayerV1.3/
 cli-commands/
