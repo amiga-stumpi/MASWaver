@@ -1200,7 +1200,8 @@ static int stream_open_direct(const char *url)
             set_status("Connecting HTTPS..."); draw_status();
             g_stream.tls_ctx = AmiTLS13_Connect(host, port, AMITLS13F_INSECURE);
             if (!g_stream.tls_ctx) {
-                set_stream_error("HTTPS TCP connect failed");
+                sprintf(g_transport_error, "HTTPS TCP connect failed se=%ld", AmiTLS13_SocketErrno());
+                set_stream_error(g_transport_error);
                 return -1;
             }
             set_status("Starting TLS..."); draw_status();
