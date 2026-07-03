@@ -85,6 +85,8 @@ LONG AmiTLS13_StartTLS(struct AmiTLS13Context *ctx, const char *host);
 LONG AmiTLS13_Write(struct AmiTLS13Context *ctx, const UBYTE *buf, ULONG len);
 LONG AmiTLS13_Read(struct AmiTLS13Context *ctx, UBYTE *buf, ULONG maxlen);
 void AmiTLS13_Close(struct AmiTLS13Context *ctx);
+LONG AmiTLS13_GetLastError(struct AmiTLS13Context *ctx);
+LONG AmiTLS13_SocketErrno(void);
 
 struct StreamEntry {
     char title[TITLE_LEN];
@@ -106,6 +108,7 @@ static struct StreamEntry g_results[MAX_RESULTS];
 static LONG g_result_count;
 static LONG g_selected;
 static char g_status[STATUS_LEN] = "Ready";
+static char g_transport_error[STATUS_LEN];
 static struct StreamState g_stream;
 
 struct TimerState {
@@ -736,11 +739,22 @@ static LONG stream_read_transport(UBYTE *buf, LONG maxlen)
 static int stream_write_all_transport(const char *buf, LONG len)
 {
     LONG done = 0;
+    g_transport_error[0] = 0;
     while (done < len) {
         LONG n;
         if (g_stream.is_tls) n = AmiTLS13_Write(g_stream.tls_ctx, (const UBYTE *)buf + done, (ULONG)(len - done));
         else n = send(g_stream.fd, (char *)buf + done, len - done, 0);
-        if (n <= 0) return 0;
+        if (n <= 0) {
+            if (g_stream.is_tls) {
+                sprintf(g_transport_error, "TLS write failed r=%ld e=%ld se=%ld",
+                    n,
+                    AmiTLS13_GetLastError(g_stream.tls_ctx),
+                    AmiTLS13_SocketErrno());
+            } else {
+                sprintf(g_transport_error, "HTTP write failed r=%ld", n);
+            }
+            return 0;
+        }
         done += n;
     }
     return 1;
@@ -1204,7 +1218,7 @@ static int stream_open_direct(const char *url)
         set_status("Requesting stream..."); draw_status();
         if (!stream_send_request(g_http_current)) {
             stream_close_transport();
-            set_stream_error("HTTP request send failed");
+            set_stream_error(g_transport_error[0] ? g_transport_error : "HTTP request send failed");
             return -1;
         }
         set_status("Reading stream header..."); draw_status();
