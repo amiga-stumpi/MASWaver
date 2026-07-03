@@ -28,7 +28,7 @@ _AmiTLS13_SetDebugOutput:
 _AmiTLS13_Connect:
     move.l a6,-(sp)
     move.l 8(sp),a0
-    move.l 12(sp),d0
+    move.w 12(sp),d0
     move.l 16(sp),d1
     move.l _AmiTLS13Base,a6
     jsr -48(a6)
