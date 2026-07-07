@@ -5,7 +5,7 @@ LDFLAGS=-mcrt=nix13
 BUILD=build
 TARGET=$(BUILD)/MASWaver
 CORE=$(BUILD)/mwcore
-CORE_OBJS=$(BUILD)/main.o $(BUILD)/mas_direct.o $(BUILD)/mas_irq.o $(BUILD)/amitls13_client_stubs.o
+CORE_OBJS=$(BUILD)/main.o $(BUILD)/mas_direct.o $(BUILD)/mas_irq.o
 LAUNCHER_OBJS=$(BUILD)/launcher.o
 STREAMS=$(BUILD)/streams.txt
 

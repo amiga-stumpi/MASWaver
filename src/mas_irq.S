@@ -8783,6 +8783,7 @@ Send_Block_End:
 	moveq.l #0,d0
 Send_Store_Read:
 	move.l d0,20(a1)
+	add.l #202,8(a1)
 	sub.l #202,12(a1)
 Send_Return:
 	movem.l (sp)+,d3-d7/a3-a4

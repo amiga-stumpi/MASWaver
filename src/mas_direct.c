@@ -113,6 +113,93 @@ static void iic_write_cmd(const UBYTE *bytes, UWORD len)
     iic_stop();
 }
 
+static int mas_iic_suspend_irq(void)
+{
+    int was_running = g_interrupt_added;
+    if (was_running) stop_cia_timer_interrupt();
+    return was_running;
+}
+
+static void mas_iic_resume_irq(int was_running)
+{
+    if (was_running && g_active && g_started) start_cia_timer_interrupt();
+}
+
+static void mas_write_volume_reg(UWORD reg, ULONG value)
+{
+    UBYTE cmd[12];
+    cmd[0] = 0x3a;
+    cmd[1] = 0x68;
+    cmd[2] = 0xb0;
+    cmd[3] = 0x00;
+    cmd[4] = 0x00;
+    cmd[5] = 0x01;
+    cmd[6] = (UBYTE)(reg >> 8);
+    cmd[7] = (UBYTE)reg;
+    cmd[8] = (UBYTE)(value >> 8);
+    cmd[9] = (UBYTE)value;
+    cmd[10] = 0x00;
+    cmd[11] = (UBYTE)(value >> 16);
+    iic_write_cmd(cmd, sizeof(cmd));
+    vbeam_delay();
+    vbeam_delay();
+    vbeam_delay();
+}
+
+static void mas_write_tone(UBYTE reg, UWORD value)
+{
+    UBYTE cmd[6];
+    cmd[0] = 0x3a;
+    cmd[1] = 0x68;
+    cmd[2] = 0x96;
+    cmd[3] = reg;
+    cmd[4] = (UBYTE)(value >> 8);
+    cmd[5] = (UBYTE)value;
+    iic_write_cmd(cmd, sizeof(cmd));
+}
+
+void mas_direct_set_volume_step(LONG volume)
+{
+    ULONG value;
+    int was_running;
+    if (volume < 0) volume = 0;
+    if (volume > 10) volume = 10;
+    if (volume == 0) value = 0xfffffUL;
+    else value = 0x80000UL + (ULONG)(5000L * (100L - volume * 10L));
+    was_running = mas_iic_suspend_irq();
+    mas_write_volume_reg(0x07f8, value);
+    mas_write_volume_reg(0x07fb, value);
+    mas_iic_resume_irq(was_running);
+}
+
+void mas_direct_set_bass_step(LONG bass)
+{
+    static const UWORD tab[11] = {
+        0xd8c0, 0xe040, 0xe800, 0xefc0, 0xf7c0, 0x0000,
+        0x0800, 0x1000, 0x17c0, 0x1f80, 0x2700
+    };
+    int was_running;
+    if (bass < -5) bass = -5;
+    if (bass > 5) bass = 5;
+    was_running = mas_iic_suspend_irq();
+    mas_write_tone(0xb0, tab[bass + 5]);
+    mas_iic_resume_irq(was_running);
+}
+
+void mas_direct_set_treble_step(LONG treble)
+{
+    static const UWORD tab[11] = {
+        0xe7e0, 0xec00, 0xf0c0, 0xf5c0, 0xfac0, 0x0000,
+        0x0540, 0x0ac0, 0x1040, 0x1600, 0x1c00
+    };
+    int was_running;
+    if (treble < -5) treble = -5;
+    if (treble > 5) treble = 5;
+    was_running = mas_iic_suspend_irq();
+    mas_write_tone(0xf0, tab[treble + 5]);
+    mas_iic_resume_irq(was_running);
+}
+
 void mas_direct_reset(void)
 {
     static const UBYTE ser_init[] = {0x3a,0x68,0x93,0xb0,0x00,0x02};
@@ -228,6 +315,15 @@ ULONG mas_direct_buffer_used(void)
     used = g_irq_state.used;
     Enable();
     return used;
+}
+
+ULONG mas_direct_bytes_played(void)
+{
+    ULONG played;
+    Disable();
+    played = g_irq_state.read_pos;
+    Enable();
+    return played;
 }
 
 ULONG mas_direct_write(const UBYTE *data, ULONG len)
