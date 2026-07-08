@@ -74,9 +74,6 @@
 #define DEFER_STREAM_EOF_STOP 2
 #define DEFER_STREAM_UNDERRUN_STOP 3
 
-#define AMITLS13F_INSECURE 0x00000001UL
-#define AMITLS13_OK 0L
-
 #define GID_SEARCH 1
 #define GID_SEARCH_BUTTON 2
 #define GID_PLAY 3
@@ -471,9 +468,6 @@ static int parse_url(const char *url, char *host, LONG host_size, char *path, LO
         p = url + 7;
         *port = 80;
     }
-    else if (starts_with(url, "https://")) {
-        return 0;
-    }
     else return 0;
     slash = strchr(p, '/');
     if (!slash) slash = p + cstrlen(p);
@@ -530,12 +524,6 @@ static int connect_http(const char *url, char *path, LONG path_size)
         return -1;
     }
     return fd;
-}
-
-static int https_not_supported(void)
-{
-    set_stream_error("HTTPS streams are currently not supported. Please use HTTP streams.");
-    return -1;
 }
 
 static int timer_init(void)
@@ -1525,7 +1513,6 @@ static void derive_title_from_url(const char *url, char *title, LONG title_size,
     char tmp[24];
 
     if (starts_with(p, "http://")) p += 7;
-    else if (starts_with(p, "https://")) p += 8;
     slash = strchr(p, '/');
     if (!slash) slash = p + cstrlen(p);
     len = (LONG)(slash - p);
@@ -1569,7 +1556,7 @@ static int parse_playlist_line(char *line, struct StreamEntry *out, LONG index)
         derive_title_from_url(url, out->title, TITLE_LEN, index);
     }
 
-    if (!starts_with(url, "http://") && !starts_with(url, "https://")) return 0;
+    if (!starts_with(url, "http://")) return 0;
     copy_trim(out->url, URL_LEN, url, cstrlen(url));
     out->artist[0] = 0;
     out->genre[0] = 0;
@@ -1645,7 +1632,7 @@ static void pls_store_entry(LONG slot, char urls[][URL_LEN], char titles[][TITLE
     if (slot < 1 || slot > MAX_RESULTS) return;
     n = slot - 1;
     if (line_key_equals(key, "file")) {
-        if (starts_with(value, "http://") || starts_with(value, "https://")) {
+        if (starts_with(value, "http://")) {
             copy_trim(urls[n], URL_LEN, value, cstrlen(value));
             if (slot > *max_slot) *max_slot = slot;
         }
@@ -1745,7 +1732,7 @@ static int m3u_line_url(char *line, char *out, LONG out_size)
     while (*p == ' ' || *p == '\t') ++p;
     len = cstrlen(p);
     while (len > 0 && (p[len - 1] == '\r' || p[len - 1] == '\n' || p[len - 1] == ' ' || p[len - 1] == '\t')) p[--len] = 0;
-    if (!starts_with(p, "http://") && !starts_with(p, "https://")) return 0;
+    if (!starts_with(p, "http://")) return 0;
     copy_trim(out, out_size, p, cstrlen(p));
     return out[0] != 0;
 }
@@ -3159,18 +3146,16 @@ static int stream_make_redirect_url(const char *base_url, const char *location, 
 
     if (!location || !out || out_size <= 0) return 0;
     out[0] = 0;
-    if (starts_with(location, "http://") || starts_with(location, "https://")) {
+    if (starts_with(location, "http://")) {
         strncpy(out, location, out_size - 1);
         out[out_size - 1] = 0;
         return 1;
     }
     if (!parse_url(base_url, host, sizeof(host), path, sizeof(path), &port)) return 0;
 
-    if (starts_with(base_url, "https://")) strcpy(out, "https://");
-    else strcpy(out, "http://");
+    strcpy(out, "http://");
     strncat(out, host, out_size - strlen(out) - 1);
-    if ((starts_with(base_url, "https://") && port != 443) ||
-        (starts_with(base_url, "http://") && port != 80)) {
+    if (port != 80) {
         append_port(out, out_size, port);
     }
     if (location[0] == '/') {
@@ -3189,7 +3174,7 @@ static void set_stream_error(const char *s)
     g_stream_error[STATUS_LEN - 1] = 0;
 }
 
-static void set_http_status_error(const char *headers, int is_tls)
+static void set_http_status_error(const char *headers)
 {
     const char *p = headers;
     char line[72];
@@ -3203,14 +3188,8 @@ static void set_http_status_error(const char *headers, int is_tls)
         set_stream_error("HTTP status not OK");
         return;
     }
-    if (is_tls) {
-        strcpy(g_stream_error, "HTTPS ");
-        strncat(g_stream_error, line, sizeof(g_stream_error) - strlen(g_stream_error) - 1);
-    }
-    else {
-        strncpy(g_stream_error, line, sizeof(g_stream_error) - 1);
-        g_stream_error[sizeof(g_stream_error) - 1] = 0;
-    }
+    strncpy(g_stream_error, line, sizeof(g_stream_error) - 1);
+    g_stream_error[sizeof(g_stream_error) - 1] = 0;
 }
 
 static int stream_open_direct(const char *url)
@@ -3226,10 +3205,7 @@ static int stream_open_direct(const char *url)
         stream_close_transport();
         icy_clear();
         if (!parse_url(g_http_current, host, sizeof(host), g_http_path, sizeof(g_http_path), &port)) { set_stream_error("Unsupported stream URL"); return -1; }
-        if (starts_with(g_http_current, "https://")) {
-            return https_not_supported();
-        }
-            g_stream.fd = connect_http(g_http_current, g_http_path, sizeof(g_http_path));
+        g_stream.fd = connect_http(g_http_current, g_http_path, sizeof(g_http_path));
         if (g_stream.fd < 0) { set_stream_error("HTTP socket connect failed"); return -1; }
         set_status("Requesting stream..."); draw_status();
         net_log("request send call");
@@ -3266,7 +3242,7 @@ static int stream_open_direct(const char *url)
         }
         if (code >= 200 && code < 300) return 0;
         stream_close_transport();
-        set_http_status_error(g_http_headers, starts_with(g_http_current, "https://"));
+        set_http_status_error(g_http_headers);
         return -1;
     }
     set_stream_error("Stream redirect failed");
@@ -3452,8 +3428,7 @@ static void play_selected(void)
     }
     else {
         if (!starts_with(g_results[g_selected].url, "http://")) {
-            if (starts_with(g_results[g_selected].url, "https://")) set_status("HTTPS streams are currently not supported. Please use HTTP streams.");
-            else set_status("Unsupported stream URL");
+            set_status("Unsupported stream URL");
             draw_ui();
             return;
         }
@@ -3462,8 +3437,6 @@ static void play_selected(void)
         if (stream_open_direct(g_results[g_selected].url) < 0) {
             if (g_stack_missing) {
                 set_status("Network stack is not running");
-            } else if (starts_with(g_results[g_selected].url, "https://")) {
-                set_status("HTTPS streams are currently not supported. Please use HTTP streams.");
             } else {
                 set_status(g_stream_error[0] ? g_stream_error : "Stream connect/header failed");
             }
