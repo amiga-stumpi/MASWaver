@@ -30,15 +30,15 @@
 #include "mas_direct.h"
 
 
-#define APP_TITLE "MASWaver v1.0"
-#define VERSION_TEXT "MASWaver v1.0 by Marcel Jaehne (c)2026"
+#define APP_TITLE "MASWaver v1.1"
+#define VERSION_TEXT "MASWaver v1.1 by Marcel Jaehne (c)2026"
 
 #define WIN_W 520
 #define WIN_H 232
 #define WIN_MAX_W 640
 #define WIN_MAX_H 480
 #define WIN_INNER_MARGIN 8
-#define STATUS_BLOCK_H 74
+#define STATUS_BLOCK_H 108
 #define BUTTON_TOP_PAD 6
 #define BUTTON_AREA_H 24
 #define LIST_FRAME_TOP_OFFSET 28
@@ -56,7 +56,7 @@
 #define STREAMS_FILE "streams.txt"
 #define WINDOWS_FILE "MASWaver.win"
 #define STREAMS_LINE_LEN 320
-#define PLS_MAX_FILES 16
+#define PLS_MAX_FILES 256
 #define PLS_PATH_LEN 108
 #define HTTP_BUF_SIZE 2048
 #define STREAM_NET_CHUNK 512
@@ -68,6 +68,14 @@
 #define PLAY_TICKS_PER_SEC (1000000UL / PUMP_INTERVAL_US)
 #define STREAM_EOF_DRAIN_BYTES 4096UL
 #define STREAM_EMPTY_DRAIN_BYTES 256UL
+#define LYRICS_API_HOST "matrix.c64.social"
+#define LYRICS_API_BASE "http://matrix.c64.social"
+#define LYRICS_CACHE_FILE "lyrics.cache"
+#define LYRICS_CACHE_TMP_FILE "lyrics.tmp"
+#define LYRICS_MAX_RESPONSE 65536UL
+#define LYRICS_MAX_TEXT 49152UL
+#define LYRICS_MAX_TIMED 49152UL
+#define LYRICS_MAX_TIMED_LINES 256
 
 #define DEFER_STREAM_NONE 0
 #define DEFER_STREAM_NEXT_FILE 1
@@ -82,6 +90,7 @@
 #define GID_NEXT 6
 #define GID_QUIT 7
 #define GID_DEL 8
+#define GID_LYRICS 9
 #define GID_SAVE_NAME 20
 #define GID_SAVE_OK 21
 #define GID_SAVE_CANCEL 22
@@ -107,7 +116,8 @@
 #define WINSTATE_DIR_ADD 4
 #define WINSTATE_SAVE_M3U 5
 #define WINSTATE_SOUND 6
-#define WINSTATE_COUNT 7
+#define WINSTATE_LYRICS 7
+#define WINSTATE_COUNT 8
 
 #define RAWKEY_BACKSPACE 0x41
 #define RAWKEY_DELETE 0x46
@@ -198,6 +208,12 @@ static char g_icy_meta_buf[ICY_META_BUF];
 static LONG g_sound_bass;
 static LONG g_sound_treble;
 static LONG g_sound_volume = 10;
+static UBYTE g_lyrics_on;
+static UBYTE g_pending_lyrics_enable;
+static char g_current_timed[LYRICS_MAX_TIMED];
+static char g_sing_line[180];
+static char g_sing_next_line[180];
+static LONG g_sing_draw_secs = -1;
 
 struct WindowState {
     WORD left;
@@ -217,6 +233,7 @@ static struct IntuiText g_txt_prev = {1,0,JAM1,10,3,0,(UBYTE *)"Prev",0};
 static struct IntuiText g_txt_next = {1,0,JAM1,10,3,0,(UBYTE *)"Next",0};
 static struct IntuiText g_txt_quit = {1,0,JAM1,10,3,0,(UBYTE *)"Quit",0};
 static struct IntuiText g_txt_del = {1,0,JAM1,14,3,0,(UBYTE *)"Del",0};
+static struct IntuiText g_txt_lyrics = {1,0,JAM1,6,3,0,(UBYTE *)"Lyrics",0};
 static struct IntuiText g_menu_playlist_text = {0,1,JAM1,0,1,0,(UBYTE *)"Playlist",0};
 static struct IntuiText g_menu_playlist_open_text = {0,1,JAM1,0,1,0,(UBYTE *)"Open",0};
 static struct IntuiText g_menu_playlist_save_text = {0,1,JAM1,0,1,0,(UBYTE *)"Save",0};
@@ -237,6 +254,7 @@ static struct Menu g_menu_sound = {&g_menu_help,48,0,52,10,MENUENABLED,(UBYTE *)
 static struct Menu g_menu_open = {&g_menu_sound,0,0,44,10,MENUENABLED,(UBYTE *)"Open",&g_menu_playlist_item,0,0,0,0};
 
 static struct Gadget g_quit_gad;
+static struct Gadget g_lyrics_gad;
 static struct Gadget g_del_gad;
 static struct Gadget g_next_gad;
 static struct Gadget g_prev_gad;
@@ -451,6 +469,22 @@ static void copy_trim(char *dst, LONG dst_size, const char *src, LONG len)
             if (i + 4 < len && src[i+1] == 'a' && src[i+2] == 'm' && src[i+3] == 'p' && src[i+4] == ';') { c = '&'; i += 4; }
             else if (i + 3 < len && src[i+1] == 'l' && src[i+2] == 't' && src[i+3] == ';') { c = '<'; i += 3; }
             else if (i + 3 < len && src[i+1] == 'g' && src[i+2] == 't' && src[i+3] == ';') { c = '>'; i += 3; }
+            else if (i + 5 < len && src[i+1] == 'a' && src[i+2] == 'u' && src[i+3] == 'm' && src[i+4] == 'l' && src[i+5] == ';') { c = (char)0xe4; i += 5; }
+            else if (i + 5 < len && src[i+1] == 'o' && src[i+2] == 'u' && src[i+3] == 'm' && src[i+4] == 'l' && src[i+5] == ';') { c = (char)0xf6; i += 5; }
+            else if (i + 5 < len && src[i+1] == 'u' && src[i+2] == 'u' && src[i+3] == 'm' && src[i+4] == 'l' && src[i+5] == ';') { c = (char)0xfc; i += 5; }
+            else if (i + 5 < len && src[i+1] == 'A' && src[i+2] == 'u' && src[i+3] == 'm' && src[i+4] == 'l' && src[i+5] == ';') { c = (char)0xc4; i += 5; }
+            else if (i + 5 < len && src[i+1] == 'O' && src[i+2] == 'u' && src[i+3] == 'm' && src[i+4] == 'l' && src[i+5] == ';') { c = (char)0xd6; i += 5; }
+            else if (i + 5 < len && src[i+1] == 'U' && src[i+2] == 'u' && src[i+3] == 'm' && src[i+4] == 'l' && src[i+5] == ';') { c = (char)0xdc; i += 5; }
+            else if (i + 6 < len && src[i+1] == 's' && src[i+2] == 'z' && src[i+3] == 'l' && src[i+4] == 'i' && src[i+5] == 'g' && src[i+6] == ';') { c = (char)0xdf; i += 6; }
+        } else if ((UBYTE)c == 0xc3 && i + 1 < len) {
+            UBYTE n = (UBYTE)src[i + 1];
+            if (n == 0x84) { c = (char)0xc4; ++i; }
+            else if (n == 0x96) { c = (char)0xd6; ++i; }
+            else if (n == 0x9c) { c = (char)0xdc; ++i; }
+            else if (n == 0xa4) { c = (char)0xe4; ++i; }
+            else if (n == 0xb6) { c = (char)0xf6; ++i; }
+            else if (n == 0xbc) { c = (char)0xfc; ++i; }
+            else if (n == 0x9f) { c = (char)0xdf; ++i; }
         }
         if ((UBYTE)c < 32) c = ' ';
         dst[out++] = c;
@@ -584,8 +618,13 @@ static void timer_cleanup(void)
 
 static void clipped_window_text(struct Window *w, WORD x, WORD y, const char *s);
 static void draw_status(void);
+static int point_in_box(WORD x, WORD y, WORD x1, WORD y1, WORD x2, WORD y2);
+static void draw_sing_line(void);
+static int header_get_value(const char *headers, const char *prefix, char *out, LONG out_size);
 static void draw_play_time(void);
 static void show_sound_window(void);
+static void show_lyrics_window(void);
+static int ensure_selected_lyrics_cache(int restart_playback);
 static void draw_ui(void);
 static void stop_stream(void);
 static void service_stream_timer_signal(void);
@@ -673,6 +712,7 @@ static void layout_gadgets(void)
     g_prev_gad.GadgetText = &g_txt_prev;
     g_next_gad.GadgetText = &g_txt_next;
     g_del_gad.GadgetText = &g_txt_del;
+    g_lyrics_gad.GadgetText = &g_txt_lyrics;
     g_quit_gad.GadgetText = &g_txt_quit;
     g_search_btn_gad.LeftEdge = win_left();
     g_search_btn_gad.TopEdge = y;
@@ -686,7 +726,9 @@ static void layout_gadgets(void)
     g_next_gad.TopEdge = y;
     g_del_gad.LeftEdge = (WORD)(g_next_gad.LeftEdge + 60);
     g_del_gad.TopEdge = y;
-    g_quit_gad.LeftEdge = (WORD)(g_del_gad.LeftEdge + 52);
+    g_lyrics_gad.LeftEdge = (WORD)(g_del_gad.LeftEdge + 52);
+    g_lyrics_gad.TopEdge = y;
+    g_quit_gad.LeftEdge = (WORD)(g_lyrics_gad.LeftEdge + 64);
     g_quit_gad.TopEdge = y;
     g_search_btn_gad.Width = 64;
     g_play_gad.Width = 52;
@@ -694,8 +736,9 @@ static void layout_gadgets(void)
     g_prev_gad.Width = 52;
     g_next_gad.Width = 52;
     g_del_gad.Width = 44;
+    g_lyrics_gad.Width = 56;
     g_quit_gad.Width = 44;
-    g_search_btn_gad.Height = g_play_gad.Height = g_stop_gad.Height = g_prev_gad.Height = g_next_gad.Height = g_del_gad.Height = g_quit_gad.Height = 14;
+    g_search_btn_gad.Height = g_play_gad.Height = g_stop_gad.Height = g_prev_gad.Height = g_next_gad.Height = g_del_gad.Height = g_lyrics_gad.Height = g_quit_gad.Height = 14;
 }
 
 static void refresh_button_row(void)
@@ -709,7 +752,7 @@ static void refresh_button_row(void)
     bottom = button_area_bottom();
     SetAPen(g_win->RPort, 0);
     RectFill(g_win->RPort, g_win->BorderLeft, top, (WORD)(g_win->Width - g_win->BorderRight - 1), bottom);
-    RefreshGList(&g_search_btn_gad, g_win, 0, 7);
+    RefreshGList(&g_search_btn_gad, g_win, 0, 8);
     Move(g_win->RPort, left, bottom);
     SetAPen(g_win->RPort, 1);
     Draw(g_win->RPort, right, bottom);
@@ -732,6 +775,56 @@ static void draw_frame(WORD left, WORD top, WORD right, WORD bottom)
     Draw(g_win->RPort, right, bottom);
     Draw(g_win->RPort, left, bottom);
     Draw(g_win->RPort, left, top);
+}
+
+static void lyrics_checkbox_bounds(WORD *x1, WORD *y1, WORD *x2, WORD *y2)
+{
+    WORD right;
+    WORD y;
+    if (!g_win || !x1 || !y1 || !x2 || !y2) return;
+    right = (WORD)(win_right() - 8);
+    y = list_title_y();
+    *x1 = (WORD)(right - 88);
+    if (*x1 < win_left() + 120) *x1 = (WORD)(win_left() + 120);
+    *y1 = (WORD)(y - 7);
+    *x2 = right;
+    *y2 = (WORD)(y + 5);
+}
+
+static int lyrics_checkbox_hit(WORD mx, WORD my)
+{
+    WORD x1 = 0, y1 = 0, x2 = 0, y2 = 0;
+    if (!g_win || !g_file_list_mode) return 0;
+    lyrics_checkbox_bounds(&x1, &y1, &x2, &y2);
+    return point_in_box(mx, my, x1, y1, x2, y2);
+}
+
+static void draw_lyrics_checkbox(void)
+{
+    WORD x1 = 0, y1 = 0, x2 = 0, y2 = 0;
+    WORD box_x;
+    WORD box_y;
+    if (!g_win || !g_file_list_mode) return;
+    lyrics_checkbox_bounds(&x1, &y1, &x2, &y2);
+    SetAPen(g_win->RPort, 0);
+    RectFill(g_win->RPort, x1, y1, x2, y2);
+    SetAPen(g_win->RPort, 1);
+    SetBPen(g_win->RPort, 0);
+    SetDrMd(g_win->RPort, JAM1);
+    box_x = x1;
+    box_y = (WORD)(y1 + 1);
+    Move(g_win->RPort, box_x, box_y);
+    Draw(g_win->RPort, (WORD)(box_x + 10), box_y);
+    Draw(g_win->RPort, (WORD)(box_x + 10), (WORD)(box_y + 10));
+    Draw(g_win->RPort, box_x, (WORD)(box_y + 10));
+    Draw(g_win->RPort, box_x, box_y);
+    if (g_lyrics_on) {
+        Move(g_win->RPort, (WORD)(box_x + 2), (WORD)(box_y + 6));
+        Draw(g_win->RPort, (WORD)(box_x + 4), (WORD)(box_y + 9));
+        Draw(g_win->RPort, (WORD)(box_x + 9), (WORD)(box_y + 2));
+    }
+    Move(g_win->RPort, (WORD)(box_x + 16), (WORD)(box_y + 9));
+    Text(g_win->RPort, (STRPTR)"Lyrics on", cstrlen("Lyrics on"));
 }
 
 static void draw_status_line(WORD x, WORD y, WORD r, const char *line)
@@ -781,6 +874,106 @@ static void draw_status_title_wrapped(WORD x, WORD y, WORD r)
     } else {
         draw_status_line(x, (WORD)(y + 11), r, "");
     }
+}
+
+static void timed_find_lines_for_ms(LONG ms, char *current, LONG current_size, char *next, LONG next_size)
+{
+    const char *p = g_current_timed;
+    char best[180];
+    char best_next[180];
+    char upcoming[180];
+    char upcoming_next[180];
+    LONG best_start = -1;
+    LONG want_next = 0;
+
+    if (current && current_size > 0) current[0] = 0;
+    if (next && next_size > 0) next[0] = 0;
+    best[0] = 0;
+    best_next[0] = 0;
+    upcoming[0] = 0;
+    upcoming_next[0] = 0;
+
+    while (p && *p) {
+        LONG start = 0;
+        LONG end = -1;
+        const char *line_start;
+        char text[180];
+        while (*p >= '0' && *p <= '9') { start = start * 10 + (*p - '0'); ++p; }
+        if (*p != '|') break;
+        ++p;
+        if (*p == '-') { end = -1; while (*p && *p != '|') ++p; }
+        else {
+            end = 0;
+            while (*p >= '0' && *p <= '9') { end = end * 10 + (*p - '0'); ++p; }
+        }
+        if (*p != '|') break;
+        ++p;
+        line_start = p;
+        while (*p && *p != '\n') ++p;
+        copy_trim(text, sizeof(text), line_start, (LONG)(p - line_start));
+
+        if (start > ms) {
+            if (!upcoming[0]) copy_trim(upcoming, sizeof(upcoming), text, cstrlen(text));
+            else if (!upcoming_next[0]) copy_trim(upcoming_next, sizeof(upcoming_next), text, cstrlen(text));
+        }
+        if (want_next) {
+            if (next && next_size > 0) copy_trim(next, next_size, text, cstrlen(text));
+            return;
+        }
+        if (ms >= start && (end < 0 || ms < end)) {
+            if (current && current_size > 0) copy_trim(current, current_size, text, cstrlen(text));
+            want_next = 1;
+        } else if (ms >= start && start >= best_start) {
+            copy_trim(best, sizeof(best), text, cstrlen(text));
+            best_start = start;
+            best_next[0] = 0;
+            want_next = 0;
+        } else if (best[0] && !best_next[0] && start > best_start) {
+            copy_trim(best_next, sizeof(best_next), text, cstrlen(text));
+        }
+        if (*p == '\n') ++p;
+    }
+    if (current && current_size > 0 && !current[0]) {
+        if (best[0]) copy_trim(current, current_size, best, cstrlen(best));
+        else if (upcoming[0]) copy_trim(current, current_size, upcoming, cstrlen(upcoming));
+    }
+    if (next && next_size > 0 && !next[0]) {
+        if (best_next[0]) copy_trim(next, next_size, best_next, cstrlen(best_next));
+        else if (upcoming_next[0]) copy_trim(next, next_size, upcoming_next, cstrlen(upcoming_next));
+    }
+}
+
+static void update_sing_line_for_secs(LONG secs)
+{
+    if (!g_lyrics_on || !g_current_timed[0]) {
+        g_sing_line[0] = 0;
+        g_sing_next_line[0] = 0;
+        return;
+    }
+    timed_find_lines_for_ms(secs * 1000L, g_sing_line, sizeof(g_sing_line), g_sing_next_line, sizeof(g_sing_next_line));
+}
+
+static void draw_sing_line(void)
+{
+    char line[220];
+    WORD x, r, y;
+    if (!g_win) return;
+    x = (WORD)(win_left() + 4);
+    r = (WORD)(win_right() - 4);
+    y = (WORD)(status_top() + 77);
+    if (!g_lyrics_on) {
+        SetAPen(g_win->RPort, 0);
+        RectFill(g_win->RPort, x, (WORD)(y - 8), r, (WORD)(y + 13));
+        return;
+    }
+    line[0] = 0;
+    strncat(line, "Sing: ", sizeof(line) - strlen(line) - 1);
+    strncat(line, g_sing_line[0] ? g_sing_line : "No Lyrics found", sizeof(line) - strlen(line) - 1);
+    draw_status_line(x, y, r, line);
+    line[0] = 0;
+    strncat(line, "      ", sizeof(line) - strlen(line) - 1);
+    if (g_sing_next_line[0]) strncat(line, g_sing_next_line, sizeof(line) - strlen(line) - 1);
+    draw_status_line(x, (WORD)(y + 11), r, line);
 }
 
 static LONG visible_list_rows(void)
@@ -1093,6 +1286,11 @@ static void draw_status(void)
     draw_status_line(x, (WORD)(y + 43), r, line);
 
     draw_status_title_wrapped(x, (WORD)(y + 54), r);
+    if (g_lyrics_on) {
+        LONG ssecs = current_play_elapsed_secs();
+        update_sing_line_for_secs(ssecs);
+        draw_sing_line();
+    }
 }
 
 static void draw_play_time(void)
@@ -1138,6 +1336,10 @@ static void draw_play_time(void)
     SetDrMd(g_win->RPort, JAM1);
     Move(g_win->RPort, tx, y);
     Text(g_win->RPort, (STRPTR)value, cstrlen(value));
+    if (g_lyrics_on) {
+        update_sing_line_for_secs(secs);
+        draw_sing_line();
+    }
 }
 
 
@@ -1163,6 +1365,7 @@ static void draw_ui(void)
     Move(g_win->RPort, x, y0);
     if (g_file_list_mode) Text(g_win->RPort, (STRPTR)"Selected Filelist", cstrlen("Selected Filelist"));
     else Text(g_win->RPort, (STRPTR)"Available Streams", cstrlen("Available Streams"));
+    draw_lyrics_checkbox();
     ensure_selected_visible();
     for (i = 0; i < MAX_RESULTS; ++i) {
         LONG idx = g_list_top + i;
@@ -1243,7 +1446,7 @@ static void draw_info_window(struct Window *w)
         WORD x = (WORD)(w->BorderLeft + 12);
         WORD y = (WORD)(w->BorderTop + 14);
         info_text(rp, x, y, "MASWaver for Kickstart 1.3");
-        info_text(rp, x, (WORD)(y + 14), "Version: v1.0");
+        info_text(rp, x, (WORD)(y + 14), "Version: v1.1");
         info_text(rp, x, (WORD)(y + 28), "by Marcel Jaehne (c)2026");
         info_text(rp, x, (WORD)(y + 44), "MP3 internet streams for MAS Player Pro");
         info_text(rp, x, (WORD)(y + 62), "If you want to buy me a coffee,");
@@ -1848,6 +2051,162 @@ static int has_playlist_suffix(const char *name)
     return has_pls_suffix(name) || has_m3u_suffix(name);
 }
 
+static LONG dialog_entry_rank(UBYTE type)
+{
+    if (type == 2) return 0;
+    if (type == 1) return 1;
+    return 2;
+}
+
+static int dialog_name_less(const char *a, UBYTE atype, const char *b, UBYTE btype)
+{
+    LONG ar = dialog_entry_rank(atype);
+    LONG br = dialog_entry_rank(btype);
+    LONG i = 0;
+
+    if (ar != br) return ar < br;
+    while (a[i] && b[i]) {
+        char ca = lower_char(a[i]);
+        char cb = lower_char(b[i]);
+        if (ca != cb) return ca < cb;
+        ++i;
+    }
+    return a[i] == 0 && b[i] != 0;
+}
+
+static void sort_dialog_entries(char names[][PLS_PATH_LEN], UBYTE is_dir[], UBYTE selected[], LONG count)
+{
+    LONG i, j;
+    LONG start = (count > 0 && is_dir[0] == 2) ? 1 : 0;
+    for (i = start + 1; i < count; ++i) {
+        for (j = i; j > start; --j) {
+            char tmp_name[PLS_PATH_LEN];
+            UBYTE tmp_type;
+            UBYTE tmp_sel = 0;
+            if (!dialog_name_less(names[j], is_dir[j], names[j - 1], is_dir[j - 1])) break;
+            memcpy(tmp_name, names[j - 1], PLS_PATH_LEN);
+            tmp_type = is_dir[j - 1];
+            if (selected) tmp_sel = selected[j - 1];
+            memcpy(names[j - 1], names[j], PLS_PATH_LEN);
+            is_dir[j - 1] = is_dir[j];
+            if (selected) selected[j - 1] = selected[j];
+            memcpy(names[j], tmp_name, PLS_PATH_LEN);
+            is_dir[j] = tmp_type;
+            if (selected) selected[j] = tmp_sel;
+        }
+    }
+}
+
+static LONG dialog_visible_rows(struct Window *w, WORD first_y, WORD bottom)
+{
+    LONG rows;
+    if (!w || bottom < first_y) return 1;
+    rows = ((LONG)(bottom - first_y) / 12L) + 1L;
+    if (rows < 1) rows = 1;
+    return rows;
+}
+
+static void clamp_dialog_top(LONG *top, LONG count, LONG rows)
+{
+    LONG max_top;
+    if (!top) return;
+    if (rows < 1) rows = 1;
+    if (*top < 0) *top = 0;
+    max_top = count > rows ? count - rows : 0;
+    if (*top > max_top) *top = max_top;
+}
+
+static int point_in_box(WORD x, WORD y, WORD x1, WORD y1, WORD x2, WORD y2)
+{
+    return x >= x1 && x <= x2 && y >= y1 && y <= y2;
+}
+
+static void draw_dialog_button(struct Window *w, WORD x1, WORD y1, WORD x2, WORD y2, const char *label, int pressed)
+{
+    struct RastPort *rp;
+    WORD tx, ty;
+    LONG len;
+
+    if (!w || !label) return;
+    rp = w->RPort;
+    SetDrMd(rp, JAM1);
+    SetAPen(rp, pressed ? 1 : 0);
+    RectFill(rp, x1, y1, x2, y2);
+    SetAPen(rp, 1);
+    Move(rp, x1, y1);
+    Draw(rp, x2, y1);
+    Draw(rp, x2, y2);
+    Draw(rp, x1, y2);
+    Draw(rp, x1, y1);
+    len = cstrlen(label);
+    tx = (WORD)(x1 + ((x2 - x1 + 1) - (len * 8)) / 2);
+    if (tx < x1 + 2) tx = (WORD)(x1 + 2);
+    ty = (WORD)(y1 + ((y2 - y1 + 1) + 6) / 2);
+    SetAPen(rp, pressed ? 0 : 1);
+    SetBPen(rp, pressed ? 1 : 0);
+    Move(rp, tx, ty);
+    Text(rp, (STRPTR)label, len);
+}
+
+static void dialog_scroll_button_bounds(struct Window *w, WORD first_y, WORD bottom, WORD *up_x1, WORD *up_y1, WORD *up_x2, WORD *up_y2, WORD *dn_x1, WORD *dn_y1, WORD *dn_x2, WORD *dn_y2)
+{
+    WORD right;
+
+    if (!w) return;
+    right = (WORD)(w->Width - w->BorderRight - 6);
+    *up_x1 = (WORD)(right - 20);
+    *up_x2 = (WORD)(right - 4);
+    *up_y1 = first_y;
+    *up_y2 = (WORD)(first_y + 12);
+    *dn_x1 = *up_x1;
+    *dn_x2 = *up_x2;
+    *dn_y1 = (WORD)(bottom - 12);
+    *dn_y2 = bottom;
+    if (*dn_y1 < *up_y2 + 2) {
+        *dn_y1 = (WORD)(*up_y2 + 2);
+        *dn_y2 = (WORD)(*dn_y1 + 12);
+    }
+}
+
+static void draw_dialog_scroll_buttons(struct Window *w, LONG top, LONG count, LONG rows, WORD first_y, WORD bottom)
+{
+    WORD ux1 = 0, uy1 = 0, ux2 = 0, uy2 = 0, dx1 = 0, dy1 = 0, dx2 = 0, dy2 = 0;
+
+    if (!w || count <= rows) return;
+    dialog_scroll_button_bounds(w, first_y, bottom, &ux1, &uy1, &ux2, &uy2, &dx1, &dy1, &dx2, &dy2);
+    draw_dialog_button(w, ux1, uy1, ux2, uy2, "^", 0);
+    draw_dialog_button(w, dx1, dy1, dx2, dy2, "v", 0);
+    if (top <= 0) {
+        SetAPen(w->RPort, 0);
+        Move(w->RPort, (WORD)(ux1 + 5), (WORD)(uy1 + 8));
+        Text(w->RPort, (STRPTR)"^", 1);
+    }
+    if (top + rows >= count) {
+        SetAPen(w->RPort, 0);
+        Move(w->RPort, (WORD)(dx1 + 5), (WORD)(dy1 + 8));
+        Text(w->RPort, (STRPTR)"v", 1);
+    }
+}
+
+static int dialog_handle_scroll_click(struct Window *w, WORD mx, WORD my, LONG *top, LONG count, LONG rows, WORD first_y, WORD bottom)
+{
+    WORD ux1 = 0, uy1 = 0, ux2 = 0, uy2 = 0, dx1 = 0, dy1 = 0, dx2 = 0, dy2 = 0;
+
+    if (!w || !top || count <= rows) return 0;
+    dialog_scroll_button_bounds(w, first_y, bottom, &ux1, &uy1, &ux2, &uy2, &dx1, &dy1, &dx2, &dy2);
+    if (point_in_box(mx, my, ux1, uy1, ux2, uy2)) {
+        --(*top);
+        clamp_dialog_top(top, count, rows);
+        return 1;
+    }
+    if (point_in_box(mx, my, dx1, dy1, dx2, dy2)) {
+        ++(*top);
+        clamp_dialog_top(top, count, rows);
+        return 1;
+    }
+    return 0;
+}
+
 static LONG scan_playlist_dir(const char *dir, char names[][PLS_PATH_LEN], UBYTE is_dir[])
 {
     struct FileInfoBlock *fib;
@@ -1882,12 +2241,14 @@ static LONG scan_playlist_dir(const char *dir, char names[][PLS_PATH_LEN], UBYTE
         UnLock(lock);
     }
     FreeMem(fib, sizeof(struct FileInfoBlock));
+    sort_dialog_entries(names, is_dir, 0, count);
     return count;
 }
 
-static void draw_playlist_window(struct Window *w, const char *dir, char names[][PLS_PATH_LEN], UBYTE is_dir[], LONG count)
+static void draw_playlist_window(struct Window *w, const char *dir, char names[][PLS_PATH_LEN], UBYTE is_dir[], LONG count, LONG top)
 {
     LONG i;
+    LONG rows;
     struct RastPort *rp;
     char line[128];
     WORD left, right, bottom;
@@ -1913,21 +2274,24 @@ static void draw_playlist_window(struct Window *w, const char *dir, char names[]
         clipped_window_text(w, (WORD)(w->BorderLeft + 10), (WORD)(w->BorderTop + 46), path_is_root(dir) ? "No volumes found" : "No .pls/.m3u files found");
         return;
     }
-    for (i = 0; i < count; ++i) {
+    rows = dialog_visible_rows(w, (WORD)(w->BorderTop + 46), bottom);
+    clamp_dialog_top(&top, count, rows);
+    for (i = 0; i < rows && top + i < count; ++i) {
+        LONG idx = top + i;
         WORD y = (WORD)(w->BorderTop + 46 + i * 12);
-        if (y > bottom) break;
         line[0] = 0;
-        if (is_dir[i] == 1) {
+        if (is_dir[idx] == 1) {
             strncat(line, "[", sizeof(line) - strlen(line) - 1);
-            strncat(line, names[i], sizeof(line) - strlen(line) - 1);
+            strncat(line, names[idx], sizeof(line) - strlen(line) - 1);
             strncat(line, "]", sizeof(line) - strlen(line) - 1);
-        } else if (is_dir[i] == 2) {
+        } else if (is_dir[idx] == 2) {
             strncat(line, "[..]", sizeof(line) - strlen(line) - 1);
         } else {
-            strncat(line, names[i], sizeof(line) - strlen(line) - 1);
+            strncat(line, names[idx], sizeof(line) - strlen(line) - 1);
         }
         clipped_window_text(w, (WORD)(w->BorderLeft + 14), y, line);
     }
+    draw_dialog_scroll_buttons(w, top, count, rows, (WORD)(w->BorderTop + 46), bottom);
 }
 
 static void show_playlist_file_window(void)
@@ -1939,6 +2303,7 @@ static void show_playlist_file_window(void)
     char current_dir[PLS_PATH_LEN];
     char path[URL_LEN];
     LONG count;
+    LONG top = 0;
     int done = 0;
 
     current_dir[0] = 0;
@@ -1949,7 +2314,7 @@ static void show_playlist_file_window(void)
     clamp_new_window_size(&nw, 240, 104, 640, 480);
     nw.DetailPen = 0;
     nw.BlockPen = 1;
-    nw.IDCMPFlags = IDCMP_CLOSEWINDOW | IDCMP_REFRESHWINDOW | IDCMP_MOUSEBUTTONS | IDCMP_NEWSIZE;
+    nw.IDCMPFlags = IDCMP_CLOSEWINDOW | IDCMP_REFRESHWINDOW | IDCMP_MOUSEBUTTONS | IDCMP_NEWSIZE | IDCMP_RAWKEY;
     nw.Flags = WFLG_CLOSEGADGET | WFLG_DRAGBAR | WFLG_DEPTHGADGET | WFLG_SIZEGADGET | WFLG_ACTIVATE | WFLG_SMART_REFRESH;
     nw.MinWidth = 240;
     nw.MinHeight = 104;
@@ -1960,7 +2325,7 @@ static void show_playlist_file_window(void)
 
     w = open_window_with_position_fallback(&nw);
     if (!w) return;
-    draw_playlist_window(w, current_dir, names, is_dir, count);
+    draw_playlist_window(w, current_dir, names, is_dir, count, top);
     while (!done) {
         ULONG sigmask = (1UL << w->UserPort->mp_SigBit) | g_timer.sigmask;
         ULONG got_sig = Wait(sigmask);
@@ -1972,28 +2337,54 @@ static void show_playlist_file_window(void)
             else if (msg->Class == IDCMP_REFRESHWINDOW) {
                 BeginRefresh(w);
                 EndRefresh(w, TRUE);
-                draw_playlist_window(w, current_dir, names, is_dir, count);
+                draw_playlist_window(w, current_dir, names, is_dir, count, top);
             }
             else if (msg->Class == IDCMP_NEWSIZE) {
-                draw_playlist_window(w, current_dir, names, is_dir, count);
+                clamp_dialog_top(&top, count, dialog_visible_rows(w, (WORD)(w->BorderTop + 46), (WORD)(w->Height - w->BorderBottom - 6)));
+                draw_playlist_window(w, current_dir, names, is_dir, count, top);
+            }
+            else if (msg->Class == IDCMP_RAWKEY) {
+                UWORD raw = msg->Code & 0x7f;
+                LONG rows = dialog_visible_rows(w, (WORD)(w->BorderTop + 46), (WORD)(w->Height - w->BorderBottom - 6));
+                if (raw == RAWKEY_UP) --top;
+                else if (raw == RAWKEY_DOWN) ++top;
+                clamp_dialog_top(&top, count, rows);
+                draw_playlist_window(w, current_dir, names, is_dir, count, top);
             }
             else if (msg->Class == IDCMP_MOUSEBUTTONS && msg->Code == SELECTDOWN) {
-                LONG row = (msg->MouseY - (w->BorderTop + 38)) / 12;
-                if (row >= 0 && row < count) {
-                    if (is_dir[row] == 2) {
+                WORD first_y = (WORD)(w->BorderTop + 46);
+                WORD bottom = (WORD)(w->Height - w->BorderBottom - 6);
+                LONG rows = dialog_visible_rows(w, first_y, bottom);
+                LONG row;
+                LONG idx;
+                if (dialog_handle_scroll_click(w, msg->MouseX, msg->MouseY, &top, count, rows, first_y, bottom)) {
+                    draw_playlist_window(w, current_dir, names, is_dir, count, top);
+                    ReplyMsg((struct Message *)msg);
+                    continue;
+                }
+                if (msg->MouseY < first_y || msg->MouseY > bottom) {
+                    ReplyMsg((struct Message *)msg);
+                    continue;
+                }
+                row = (msg->MouseY - first_y) / 12;
+                idx = top + row;
+                if (row >= 0 && idx >= 0 && idx < count) {
+                    if (is_dir[idx] == 2) {
                         parent_path(current_dir);
+                        top = 0;
                         count = scan_playlist_dir(current_dir, names, is_dir);
-                        draw_playlist_window(w, current_dir, names, is_dir, count);
+                        draw_playlist_window(w, current_dir, names, is_dir, count, top);
                     }
-                    else if (is_dir[row] == 1) {
-                        if (path_is_root(current_dir)) copy_trim(path, sizeof(path), names[row], cstrlen(names[row]));
-                        else join_path(path, sizeof(path), current_dir, names[row]);
+                    else if (is_dir[idx] == 1) {
+                        if (path_is_root(current_dir)) copy_trim(path, sizeof(path), names[idx], cstrlen(names[idx]));
+                        else join_path(path, sizeof(path), current_dir, names[idx]);
                         copy_trim(current_dir, sizeof(current_dir), path, cstrlen(path));
+                        top = 0;
                         count = scan_playlist_dir(current_dir, names, is_dir);
-                        draw_playlist_window(w, current_dir, names, is_dir, count);
+                        draw_playlist_window(w, current_dir, names, is_dir, count, top);
                     }
                     else {
-                        join_path(path, sizeof(path), current_dir, names[row]);
+                        join_path(path, sizeof(path), current_dir, names[idx]);
                         load_playlist_file(path);
                         done = 1;
                     }
@@ -2102,6 +2493,7 @@ static LONG scan_volumes(char names[][PLS_PATH_LEN], UBYTE is_dir[])
         node = dl ? dl->dl_Next : 0;
     }
     Permit();
+    sort_dialog_entries(names, is_dir, 0, count);
 
     return count;
 }
@@ -2140,12 +2532,14 @@ static LONG scan_file_dir(const char *dir, char names[][PLS_PATH_LEN], UBYTE is_
         UnLock(lock);
     }
     FreeMem(fib, sizeof(struct FileInfoBlock));
+    sort_dialog_entries(names, is_dir, 0, count);
     return count;
 }
 
-static void draw_file_window(struct Window *w, const char *dir, char names[][PLS_PATH_LEN], UBYTE is_dir[], UBYTE selected[], LONG count)
+static void draw_file_window(struct Window *w, const char *dir, char names[][PLS_PATH_LEN], UBYTE is_dir[], UBYTE selected[], LONG count, LONG top)
 {
     LONG i;
+    LONG rows;
     struct RastPort *rp;
     char line[128];
     WORD bx1, by1, bx2, by2;
@@ -2179,28 +2573,29 @@ static void draw_file_window(struct Window *w, const char *dir, char names[][PLS
     if (count <= 0) {
         clipped_window_text(w, (WORD)(w->BorderLeft + 10), (WORD)(w->BorderTop + 34), path_is_root(dir) ? "No volumes found" : "No folders or .mp3 files");
     }
-    for (i = 0; i < count; ++i) {
+    rows = dialog_visible_rows(w, (WORD)(w->BorderTop + 34), list_bottom);
+    clamp_dialog_top(&top, count, rows);
+    for (i = 0; i < rows && top + i < count; ++i) {
+        LONG idx = top + i;
         WORD y = (WORD)(w->BorderTop + 34 + i * 12);
-        if (y > list_bottom) break;
         line[0] = 0;
-        if (is_dir[i] == 1) {
+        if (is_dir[idx] == 1) {
             strncat(line, "[", sizeof(line) - strlen(line) - 1);
-            strncat(line, names[i], sizeof(line) - strlen(line) - 1);
+            strncat(line, names[idx], sizeof(line) - strlen(line) - 1);
             strncat(line, "]", sizeof(line) - strlen(line) - 1);
-        } else if (is_dir[i] == 2) {
+        } else if (is_dir[idx] == 2) {
             strncat(line, "[..]", sizeof(line) - strlen(line) - 1);
         } else {
-            strncat(line, selected[i] ? "* " : "  ", sizeof(line) - strlen(line) - 1);
-            strncat(line, names[i], sizeof(line) - strlen(line) - 1);
+            strncat(line, selected[idx] ? "* " : "  ", sizeof(line) - strlen(line) - 1);
+            strncat(line, names[idx], sizeof(line) - strlen(line) - 1);
         }
-        if (selected[i] && is_dir[i] == 0) SetAPen(rp, 3); else SetAPen(rp, 1);
+        if (selected[idx] && is_dir[idx] == 0) SetAPen(rp, 3); else SetAPen(rp, 1);
         clipped_window_text(w, (WORD)(w->BorderLeft + 14), y, line);
     }
+    draw_dialog_scroll_buttons(w, top, count, rows, (WORD)(w->BorderTop + 34), list_bottom);
 
     if (by2 <= bottom && bx2 <= right) {
-        SetAPen(rp, 1);
-        Move(rp, bx1, by1); Draw(rp, bx2, by1); Draw(rp, bx2, by2); Draw(rp, bx1, by2); Draw(rp, bx1, by1);
-        clipped_window_text(w, (WORD)(bx1 + 14), (WORD)(by1 + 10), "Add");
+        draw_dialog_button(w, bx1, by1, bx2, by2, "Add", 0);
     }
 }
 
@@ -2656,6 +3051,7 @@ static void show_file_add_window_mode(int dir_mode)
     char current_dir[PLS_PATH_LEN];
     char path[URL_LEN];
     LONG count;
+    LONG top = 0;
     int done = 0;
 
     current_dir[0] = 0;
@@ -2667,7 +3063,7 @@ static void show_file_add_window_mode(int dir_mode)
     clamp_new_window_size(&nw, 240, 104, 640, 480);
     nw.DetailPen = 0;
     nw.BlockPen = 1;
-    nw.IDCMPFlags = IDCMP_CLOSEWINDOW | IDCMP_REFRESHWINDOW | IDCMP_MOUSEBUTTONS | IDCMP_NEWSIZE;
+    nw.IDCMPFlags = IDCMP_CLOSEWINDOW | IDCMP_REFRESHWINDOW | IDCMP_MOUSEBUTTONS | IDCMP_NEWSIZE | IDCMP_RAWKEY;
     nw.Flags = WFLG_CLOSEGADGET | WFLG_DRAGBAR | WFLG_DEPTHGADGET | WFLG_SIZEGADGET | WFLG_ACTIVATE | WFLG_SMART_REFRESH;
     nw.MinWidth = 240;
     nw.MinHeight = 104;
@@ -2678,7 +3074,7 @@ static void show_file_add_window_mode(int dir_mode)
 
     w = open_window_with_position_fallback(&nw);
     if (!w) return;
-    draw_file_window(w, current_dir, names, is_dir, selected, count);
+    draw_file_window(w, current_dir, names, is_dir, selected, count, top);
     while (!done) {
         ULONG sigmask = (1UL << w->UserPort->mp_SigBit) | g_timer.sigmask;
         ULONG got_sig = Wait(sigmask);
@@ -2690,17 +3086,33 @@ static void show_file_add_window_mode(int dir_mode)
             else if (msg->Class == IDCMP_REFRESHWINDOW) {
                 BeginRefresh(w);
                 EndRefresh(w, TRUE);
-                draw_file_window(w, current_dir, names, is_dir, selected, count);
+                draw_file_window(w, current_dir, names, is_dir, selected, count, top);
             }
             else if (msg->Class == IDCMP_NEWSIZE) {
-                draw_file_window(w, current_dir, names, is_dir, selected, count);
+                WORD add_y1 = (WORD)(w->Height - w->BorderBottom - 22);
+                WORD list_bottom = (WORD)(add_y1 - 4);
+                clamp_dialog_top(&top, count, dialog_visible_rows(w, (WORD)(w->BorderTop + 34), list_bottom));
+                draw_file_window(w, current_dir, names, is_dir, selected, count, top);
+            }
+            else if (msg->Class == IDCMP_RAWKEY) {
+                UWORD raw = msg->Code & 0x7f;
+                WORD add_y1 = (WORD)(w->Height - w->BorderBottom - 22);
+                WORD list_bottom = (WORD)(add_y1 - 4);
+                LONG rows = dialog_visible_rows(w, (WORD)(w->BorderTop + 34), list_bottom);
+                if (raw == RAWKEY_UP) --top;
+                else if (raw == RAWKEY_DOWN) ++top;
+                clamp_dialog_top(&top, count, rows);
+                draw_file_window(w, current_dir, names, is_dir, selected, count, top);
             }
             else if (msg->Class == IDCMP_MOUSEBUTTONS && msg->Code == SELECTDOWN) {
                 WORD add_x1 = (WORD)(w->BorderLeft + 10);
                 WORD add_y1 = (WORD)(w->Height - w->BorderBottom - 22);
                 WORD add_x2 = (WORD)(add_x1 + 52);
                 WORD add_y2 = (WORD)(add_y1 + 14);
-                if (msg->MouseX >= add_x1 && msg->MouseX <= add_x2 && msg->MouseY >= add_y1 && msg->MouseY <= add_y2) {
+                if (point_in_box(msg->MouseX, msg->MouseY, add_x1, add_y1, add_x2, add_y2)) {
+                    draw_dialog_button(w, add_x1, add_y1, add_x2, add_y2, "Add", 1);
+                    Delay(2);
+                    draw_dialog_button(w, add_x1, add_y1, add_x2, add_y2, "Add", 0);
                     if (dir_mode) {
                         if (add_directory_files(current_dir) > 0) done = 1;
                     }
@@ -2710,25 +3122,42 @@ static void show_file_add_window_mode(int dir_mode)
                     }
                 }
                 else {
-                    LONG row = (msg->MouseY - (w->BorderTop + 26)) / 12;
-                    if (row >= 0 && row < count) {
-                        if (is_dir[row] == 2) {
+                    WORD first_y = (WORD)(w->BorderTop + 34);
+                    WORD list_bottom = (WORD)(add_y1 - 4);
+                    LONG rows = dialog_visible_rows(w, first_y, list_bottom);
+                    LONG row;
+                    LONG idx;
+                    if (dialog_handle_scroll_click(w, msg->MouseX, msg->MouseY, &top, count, rows, first_y, list_bottom)) {
+                        draw_file_window(w, current_dir, names, is_dir, selected, count, top);
+                        ReplyMsg((struct Message *)msg);
+                        continue;
+                    }
+                    if (msg->MouseY < first_y || msg->MouseY > list_bottom) {
+                        ReplyMsg((struct Message *)msg);
+                        continue;
+                    }
+                    row = (msg->MouseY - first_y) / 12;
+                    idx = top + row;
+                    if (row >= 0 && idx >= 0 && idx < count) {
+                        if (is_dir[idx] == 2) {
                             parent_path(current_dir);
+                            top = 0;
                             clear_file_selection(selected);
                             count = scan_file_dir(current_dir, names, is_dir);
-                            draw_file_window(w, current_dir, names, is_dir, selected, count);
+                            draw_file_window(w, current_dir, names, is_dir, selected, count, top);
                         }
-                        else if (is_dir[row] == 1) {
-                            if (path_is_root(current_dir)) copy_trim(path, sizeof(path), names[row], cstrlen(names[row]));
-                            else join_path(path, sizeof(path), current_dir, names[row]);
+                        else if (is_dir[idx] == 1) {
+                            if (path_is_root(current_dir)) copy_trim(path, sizeof(path), names[idx], cstrlen(names[idx]));
+                            else join_path(path, sizeof(path), current_dir, names[idx]);
                             copy_trim(current_dir, sizeof(current_dir), path, cstrlen(path));
+                            top = 0;
                             clear_file_selection(selected);
                             count = scan_file_dir(current_dir, names, is_dir);
-                            draw_file_window(w, current_dir, names, is_dir, selected, count);
+                            draw_file_window(w, current_dir, names, is_dir, selected, count, top);
                         }
                         else if (!dir_mode) {
-                            selected[row] = selected[row] ? 0 : 1;
-                            draw_file_window(w, current_dir, names, is_dir, selected, count);
+                            selected[idx] = selected[idx] ? 0 : 1;
+                            draw_file_window(w, current_dir, names, is_dir, selected, count, top);
                         }
                     }
                 }
@@ -2807,7 +3236,7 @@ static int stream_send_request(const char *url)
     strncat(req, path, sizeof(req)-strlen(req)-1);
     strncat(req, " HTTP/1.1\r\nHost: ", sizeof(req)-strlen(req)-1);
     strncat(req, host, sizeof(req)-strlen(req)-1);
-    strncat(req, "\r\nUser-Agent: MASWaver/1.0\r\nAccept: */*\r\nIcy-MetaData: 1\r\nConnection: close\r\n\r\n", sizeof(req)-strlen(req)-1);
+    strncat(req, "\r\nUser-Agent: MASWaver/1.1\r\nAccept: */*\r\nIcy-MetaData: 1\r\nConnection: close\r\n\r\n", sizeof(req)-strlen(req)-1);
     return stream_write_all_transport(req, cstrlen(req));
 }
 
@@ -2872,6 +3301,946 @@ static int stream_read_headers(char *headers, LONG headers_size)
         }
     }
     return ok;
+}
+
+static int url_is_unreserved(char c)
+{
+    if (c >= 'A' && c <= 'Z') return 1;
+    if (c >= 'a' && c <= 'z') return 1;
+    if (c >= '0' && c <= '9') return 1;
+    return c == '-' || c == '_' || c == '.' || c == '~';
+}
+
+static void url_encode_component(char *out, LONG out_size, const char *in)
+{
+    static const char hex[] = "0123456789ABCDEF";
+    LONG o = 0;
+    LONG i;
+    if (!out || out_size <= 0) return;
+    out[0] = 0;
+    if (!in) return;
+    for (i = 0; in[i] && o < out_size - 1; ++i) {
+        UBYTE c = (UBYTE)in[i];
+        if (url_is_unreserved((char)c)) out[o++] = (char)c;
+        else if (o + 3 < out_size) {
+            out[o++] = '%';
+            out[o++] = hex[(c >> 4) & 15];
+            out[o++] = hex[c & 15];
+        }
+    }
+    out[o] = 0;
+}
+
+static int lyrics_http_body(char *response, LONG len, char **body, LONG *body_len)
+{
+    LONG end;
+    if (!response || len <= 0 || !body || !body_len) return 0;
+    end = find_header_end(response, len);
+    if (end < 0) return 0;
+    *body = response + end;
+    *body_len = len - end;
+    response[end - 1] = 0;
+    return 1;
+}
+
+static int header_contains_token(const char *headers, const char *prefix, const char *token)
+{
+    char v[64];
+    LONG i;
+    LONG j;
+    if (!header_get_value(headers, prefix, v, sizeof(v))) return 0;
+    for (i = 0; v[i]; ++i) {
+        for (j = 0; token[j]; ++j) {
+            if (lower_char(v[i + j]) != lower_char(token[j])) break;
+        }
+        if (!token[j]) return 1;
+    }
+    return 0;
+}
+
+static LONG hex_value(char c)
+{
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+static LONG decode_chunked_body(char *body, LONG len)
+{
+    LONG in = 0;
+    LONG out = 0;
+    while (in < len) {
+        LONG chunk = 0;
+        LONG hv;
+        while (in < len && (body[in] == '\r' || body[in] == '\n' || body[in] == ' ' || body[in] == '\t')) ++in;
+        while (in < len) {
+            hv = hex_value(body[in]);
+            if (hv < 0) break;
+            chunk = (chunk << 4) + hv;
+            ++in;
+        }
+        while (in < len && body[in] != '\n') ++in;
+        if (in < len && body[in] == '\n') ++in;
+        if (chunk <= 0) break;
+        if (in + chunk > len) chunk = len - in;
+        memmove(body + out, body + in, chunk);
+        out += chunk;
+        in += chunk;
+    }
+    body[out] = 0;
+    return out;
+}
+
+static int json_extract_string(const char *json, const char *key, char *out, LONG out_size)
+{
+    const char *p;
+    LONG o = 0;
+    if (!json || !key || !out || out_size <= 0) return 0;
+    out[0] = 0;
+    p = strstr(json, key);
+    if (!p) return 0;
+    p += cstrlen(key);
+    while (*p && *p != ':') ++p;
+    if (*p != ':') return 0;
+    ++p;
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') ++p;
+    if (*p != '"') return 0;
+    ++p;
+    while (*p && o < out_size - 1) {
+        char c = *p++;
+        if (c == '"') break;
+        if (c == '\\') {
+            c = *p++;
+            if (c == 'n') c = '\n';
+            else if (c == 'r') c = '\n';
+            else if (c == 't') c = ' ';
+            else if (c == '"') c = '"';
+            else if (c == '\\') c = '\\';
+            else if (c == '/') c = '/';
+            else if (c == 'u') {
+                LONG k;
+                for (k = 0; k < 4 && *p; ++k) ++p;
+                c = ' ';
+            }
+        }
+        out[o++] = c;
+    }
+    out[o] = 0;
+    return o > 0;
+}
+
+static const char *json_find_key_after(const char *json, const char *end, const char *key)
+{
+    const char *p = json;
+    LONG key_len;
+    if (!json || !key) return 0;
+    key_len = cstrlen(key);
+    while (*p && (!end || p < end)) {
+        const char *q = strstr(p, key);
+        if (!q || (end && q >= end)) return 0;
+        q += key_len;
+        while (*q == ' ' || *q == '\t' || *q == '\r' || *q == '\n') ++q;
+        if (*q == ':') return q + 1;
+        p = q;
+    }
+    return 0;
+}
+
+static LONG json_parse_time_after(const char *json, const char *end, const char *key, LONG def)
+{
+    const char *p = json_find_key_after(json, end, key);
+    LONG sign = 1;
+    LONG whole = 0;
+    LONG frac = 0;
+    LONG frac_div = 1;
+    int has_frac = 0;
+    if (!p) return def;
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') ++p;
+    if (*p == '-') { sign = -1; ++p; }
+    while (*p >= '0' && *p <= '9') { whole = whole * 10 + (*p - '0'); ++p; }
+    if (*p == '.') {
+        has_frac = 1;
+        ++p;
+        while (*p >= '0' && *p <= '9' && frac_div < 1000) {
+            frac = frac * 10 + (*p - '0');
+            frac_div *= 10;
+            ++p;
+        }
+    }
+    if (!has_frac) return sign * whole;
+    while (frac_div < 1000) { frac *= 10; frac_div *= 10; }
+    return sign * (whole * 1000 + frac);
+}
+
+static int json_extract_string_between(const char *json, const char *end, const char *key, char *out, LONG out_size)
+{
+    const char *p;
+    LONG o = 0;
+    if (!json || !key || !out || out_size <= 0) return 0;
+    out[0] = 0;
+    p = json_find_key_after(json, end, key);
+    if (!p) return 0;
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') ++p;
+    if (*p != '"') return 0;
+    ++p;
+    while (*p && (!end || p < end) && o < out_size - 1) {
+        char c = *p++;
+        if (c == '"') break;
+        if (c == '\\') {
+            c = *p++;
+            if (c == 'n') c = ' ';
+            else if (c == 'r') c = ' ';
+            else if (c == 't') c = ' ';
+            else if (c == '"') c = '"';
+            else if (c == '\\') c = '\\';
+            else if (c == '/') c = '/';
+            else if (c == 'u') {
+                LONG k;
+                for (k = 0; k < 4 && *p; ++k) ++p;
+                c = ' ';
+            }
+        }
+        if ((UBYTE)c < 32) c = ' ';
+        out[o++] = c;
+    }
+    out[o] = 0;
+    return o > 0;
+}
+
+static void timed_append_line(char *timed, LONG timed_size, LONG start_ms, LONG end_ms, const char *text)
+{
+    char head[40];
+    LONG o;
+    LONG i;
+    if (!timed || timed_size <= 0 || !text || !text[0]) return;
+    o = cstrlen(timed);
+    sprintf(head, "%ld|%ld|", start_ms, end_ms);
+    if (o + cstrlen(head) + 2 >= timed_size) return;
+    strncat(timed, head, timed_size - strlen(timed) - 1);
+    o = cstrlen(timed);
+    for (i = 0; text[i] && o < timed_size - 2; ++i) {
+        char c = text[i];
+        if (c == '\n' || c == '\r' || c == '|') c = ' ';
+        timed[o++] = c;
+    }
+    timed[o++] = '\n';
+    timed[o] = 0;
+}
+
+static int json_extract_timed_lyrics(const char *json, char *timed, LONG timed_size)
+{
+    const char *arr;
+    const char *p;
+    LONG count = 0;
+    char text[180];
+    if (!json || !timed || timed_size <= 0) return 0;
+    timed[0] = 0;
+    arr = strstr(json, "\"timed_lyrics\"");
+    if (!arr) return 0;
+    arr = strchr(arr, '[');
+    if (!arr) return 0;
+    p = arr + 1;
+    while (*p && count < LYRICS_MAX_TIMED_LINES) {
+        const char *obj_start = strchr(p, '{');
+        const char *obj_end;
+        LONG start_ms;
+        LONG end_ms;
+        if (!obj_start) break;
+        obj_end = strchr(obj_start, '}');
+        if (!obj_end) break;
+        start_ms = json_parse_time_after(obj_start, obj_end, "\"start_time\"", -1);
+        end_ms = json_parse_time_after(obj_start, obj_end, "\"end_time\"", -1);
+        if (json_extract_string_between(obj_start, obj_end, "\"text\"", text, sizeof(text)) && start_ms >= 0) {
+            timed_append_line(timed, timed_size, start_ms, end_ms, text);
+            ++count;
+        }
+        p = obj_end + 1;
+    }
+    return timed[0] != 0;
+}
+
+static int lyrics_http_get(const char *url, char *response, LONG response_size, LONG *response_len)
+{
+    char path[384];
+    char host[96];
+    char req[768];
+    UWORD port;
+    int fd;
+    LONG used = 0;
+
+    if (response_len) *response_len = 0;
+    if (!response || response_size <= 1) return 0;
+    response[0] = 0;
+    if (!parse_url(url, host, sizeof(host), path, sizeof(path), &port)) return 0;
+
+    fd = connect_http(url, path, sizeof(path));
+    if (fd < 0) {
+        set_status(g_stack_missing ? "Network stack is not running" : "Lyrics connect failed");
+        return 0;
+    }
+
+    strcpy(req, "GET ");
+    strncat(req, path, sizeof(req)-strlen(req)-1);
+    strncat(req, " HTTP/1.1\r\nHost: ", sizeof(req)-strlen(req)-1);
+    strncat(req, host, sizeof(req)-strlen(req)-1);
+    strncat(req, "\r\nUser-Agent: MASWaver/1.1\r\nAccept: application/json\r\nConnection: close\r\n\r\n", sizeof(req)-strlen(req)-1);
+
+    if (send(fd, req, cstrlen(req), 0) <= 0) {
+        CloseSocket(fd);
+        set_status("Lyrics request failed");
+        return 0;
+    }
+
+    while (used < response_size - 1) {
+        LONG want = response_size - 1 - used;
+        LONG n;
+        if (want > 1024) want = 1024;
+        n = recv(fd, response + used, want, 0);
+        if (n <= 0) break;
+        used += n;
+    }
+    CloseSocket(fd);
+    response[used] = 0;
+    if (response_len) *response_len = used;
+    return used > 0;
+}
+
+static int derive_lyrics_artist_title(char *artist, LONG artist_size, char *title, LONG title_size)
+{
+    if (!artist || !title) return 0;
+    artist[0] = 0;
+    title[0] = 0;
+    if (g_selected < 0 || g_selected >= g_result_count) return 0;
+    if (!g_results[g_selected].is_file) return 0;
+    if (g_results[g_selected].artist[0]) copy_trim(artist, artist_size, g_results[g_selected].artist, cstrlen(g_results[g_selected].artist));
+    if (g_results[g_selected].title[0]) copy_trim(title, title_size, g_results[g_selected].title, cstrlen(g_results[g_selected].title));
+    return artist[0] && title[0];
+}
+
+static LONG cache_read_line(BPTR fh, char *line, LONG line_size)
+{
+    LONG pos = 0;
+    char c;
+    LONG got;
+    if (!fh || !line || line_size <= 0) return -1;
+    while ((got = Read(fh, &c, 1)) > 0) {
+        if (c == '\n') break;
+        if (c != '\r' && pos < line_size - 1) line[pos++] = c;
+    }
+    if (got <= 0 && pos == 0) return -1;
+    line[pos] = 0;
+    return pos;
+}
+
+static void cache_skip_bytes(BPTR fh, LONG count)
+{
+    char buf[128];
+    while (count > 0) {
+        LONG want = count > (LONG)sizeof(buf) ? (LONG)sizeof(buf) : count;
+        LONG got = Read(fh, buf, want);
+        if (got <= 0) break;
+        count -= got;
+    }
+}
+
+static int lyrics_cache_key_matches(const char *a, const char *b, const char *artist, const char *title)
+{
+    return a && b && artist && title && strcmp(a, artist) == 0 && strcmp(b, title) == 0;
+}
+
+static int lyrics_cache_load(const char *artist, const char *title, char *lyrics, LONG lyrics_size)
+{
+    BPTR fh;
+    char line[192];
+    char rec_artist[TITLE_LEN];
+    char rec_title[TITLE_LEN];
+    LONG len;
+
+    if (!artist || !title || !lyrics || lyrics_size <= 1) return 0;
+    lyrics[0] = 0;
+    fh = Open((STRPTR)LYRICS_CACHE_FILE, MODE_OLDFILE);
+    if (!fh) return 0;
+
+    while (cache_read_line(fh, line, sizeof(line)) >= 0) {
+        if (strcmp(line, "[lyrics]") != 0) continue;
+        rec_artist[0] = 0;
+        rec_title[0] = 0;
+        len = 0;
+        if (cache_read_line(fh, line, sizeof(line)) < 0) break;
+        if (starts_with(line, "A:")) copy_trim(rec_artist, sizeof(rec_artist), line + 2, cstrlen(line + 2));
+        if (cache_read_line(fh, line, sizeof(line)) < 0) break;
+        if (starts_with(line, "T:")) copy_trim(rec_title, sizeof(rec_title), line + 2, cstrlen(line + 2));
+        if (cache_read_line(fh, line, sizeof(line)) < 0) break;
+        if (starts_with(line, "L:")) len = parse_positive_long(line + 2);
+        if (len <= 0 || len > (LONG)LYRICS_MAX_TEXT) continue;
+        if (lyrics_cache_key_matches(rec_artist, rec_title, artist, title)) {
+            LONG to_read = len < lyrics_size - 1 ? len : lyrics_size - 1;
+            LONG got = Read(fh, lyrics, to_read);
+            if (got < 0) got = 0;
+            lyrics[got] = 0;
+            if (len > got) cache_skip_bytes(fh, len - got);
+            Close(fh);
+            return got > 0;
+        }
+        cache_skip_bytes(fh, len);
+    }
+    Close(fh);
+    return 0;
+}
+
+static LONG lyrics_cache_read_optional_timed(BPTR fh, char *timed, LONG timed_size);
+
+static int lyrics_cache_load_timed(const char *artist, const char *title, char *timed, LONG timed_size)
+{
+    BPTR fh;
+    char line[192];
+    char rec_artist[TITLE_LEN];
+    char rec_title[TITLE_LEN];
+    LONG len;
+    if (!artist || !title || !timed || timed_size <= 0) return 0;
+    timed[0] = 0;
+    fh = Open((STRPTR)LYRICS_CACHE_FILE, MODE_OLDFILE);
+    if (!fh) return 0;
+    while (cache_read_line(fh, line, sizeof(line)) >= 0) {
+        if (strcmp(line, "[lyrics]") != 0) continue;
+        rec_artist[0] = 0;
+        rec_title[0] = 0;
+        len = 0;
+        if (cache_read_line(fh, line, sizeof(line)) < 0) break;
+        if (starts_with(line, "A:")) copy_trim(rec_artist, sizeof(rec_artist), line + 2, cstrlen(line + 2));
+        if (cache_read_line(fh, line, sizeof(line)) < 0) break;
+        if (starts_with(line, "T:")) copy_trim(rec_title, sizeof(rec_title), line + 2, cstrlen(line + 2));
+        if (cache_read_line(fh, line, sizeof(line)) < 0) break;
+        if (starts_with(line, "L:")) len = parse_positive_long(line + 2);
+        if (len <= 0 || len > (LONG)LYRICS_MAX_TEXT) continue;
+        cache_skip_bytes(fh, len);
+        if (lyrics_cache_key_matches(rec_artist, rec_title, artist, title)) {
+            LONG got = lyrics_cache_read_optional_timed(fh, timed, timed_size);
+            Close(fh);
+            return got > 0;
+        }
+        lyrics_cache_read_optional_timed(fh, timed, timed_size);
+        timed[0] = 0;
+    }
+    Close(fh);
+    return 0;
+}
+
+static void lyrics_cache_save(const char *artist, const char *title, const char *lyrics, const char *timed)
+{
+    BPTR fh;
+    LONG len;
+    char line[64];
+
+    if (!artist || !title || !lyrics || !lyrics[0]) return;
+    fh = Open((STRPTR)LYRICS_CACHE_FILE, MODE_READWRITE);
+    if (fh) Seek(fh, 0, OFFSET_END);
+    else fh = Open((STRPTR)LYRICS_CACHE_FILE, MODE_NEWFILE);
+    if (!fh) return;
+
+    len = cstrlen(lyrics);
+    Write(fh, (APTR)"[lyrics]\nA:", 11);
+    Write(fh, (APTR)artist, cstrlen(artist));
+    Write(fh, (APTR)"\nT:", 3);
+    Write(fh, (APTR)title, cstrlen(title));
+    sprintf(line, "\nL:%ld\n", len);
+    Write(fh, (APTR)line, cstrlen(line));
+    Write(fh, (APTR)lyrics, len);
+    Write(fh, (APTR)"\n", 1);
+    if (timed && timed[0]) {
+        LONG tlen = cstrlen(timed);
+        sprintf(line, "TIMED:%ld\n", tlen);
+        Write(fh, (APTR)line, cstrlen(line));
+        Write(fh, (APTR)timed, tlen);
+        Write(fh, (APTR)"\n", 1);
+    }
+    Close(fh);
+}
+
+static LONG lyrics_cache_read_optional_timed(BPTR fh, char *timed, LONG timed_size)
+{
+    char line[64];
+    LONG len = 0;
+    LONG got;
+    LONG pos;
+    if (!fh || !timed || timed_size <= 0) return 0;
+    timed[0] = 0;
+    pos = Seek(fh, 0, OFFSET_CURRENT);
+    got = cache_read_line(fh, line, sizeof(line));
+    if (got < 0) return 0;
+    if (got == 0) got = cache_read_line(fh, line, sizeof(line));
+    if (got < 0 || !starts_with(line, "TIMED:")) {
+        if (pos >= 0) Seek(fh, pos, OFFSET_BEGINNING);
+        return 0;
+    }
+    len = parse_positive_long(line + 6);
+    if (len <= 0 || len > (LONG)LYRICS_MAX_TIMED) return 0;
+    got = Read(fh, timed, len < timed_size - 1 ? len : timed_size - 1);
+    if (got < 0) got = 0;
+    timed[got] = 0;
+    if (len > got) cache_skip_bytes(fh, len - got);
+    return got;
+}
+
+static int lyrics_cache_delete(const char *artist, const char *title)
+{
+    BPTR in;
+    BPTR out;
+    char line[192];
+    char rec_artist[TITLE_LEN];
+    char rec_title[TITLE_LEN];
+    char len_line[64];
+    char *body;
+    char *timed;
+    LONG len;
+    int removed = 0;
+
+    if (!artist || !title) return 0;
+    in = Open((STRPTR)LYRICS_CACHE_FILE, MODE_OLDFILE);
+    if (!in) return 0;
+    out = Open((STRPTR)LYRICS_CACHE_TMP_FILE, MODE_NEWFILE);
+    if (!out) {
+        Close(in);
+        return 0;
+    }
+    body = (char *)AllocMem(LYRICS_MAX_TEXT, MEMF_PUBLIC | MEMF_CLEAR);
+    timed = (char *)AllocMem(LYRICS_MAX_TIMED, MEMF_PUBLIC | MEMF_CLEAR);
+    if (!body || !timed) {
+        if (body) FreeMem(body, LYRICS_MAX_TEXT);
+        if (timed) FreeMem(timed, LYRICS_MAX_TIMED);
+        Close(in);
+        Close(out);
+        DeleteFile((STRPTR)LYRICS_CACHE_TMP_FILE);
+        return 0;
+    }
+
+    while (cache_read_line(in, line, sizeof(line)) >= 0) {
+        if (strcmp(line, "[lyrics]") != 0) continue;
+        rec_artist[0] = 0;
+        rec_title[0] = 0;
+        len = 0;
+        if (cache_read_line(in, line, sizeof(line)) < 0) break;
+        if (starts_with(line, "A:")) copy_trim(rec_artist, sizeof(rec_artist), line + 2, cstrlen(line + 2));
+        if (cache_read_line(in, line, sizeof(line)) < 0) break;
+        if (starts_with(line, "T:")) copy_trim(rec_title, sizeof(rec_title), line + 2, cstrlen(line + 2));
+        if (cache_read_line(in, line, sizeof(line)) < 0) break;
+        if (starts_with(line, "L:")) len = parse_positive_long(line + 2);
+        if (len <= 0 || len > (LONG)LYRICS_MAX_TEXT) {
+            if (len > 0) cache_skip_bytes(in, len);
+            continue;
+        }
+        if (Read(in, body, len) != len) break;
+        body[len] = 0;
+        lyrics_cache_read_optional_timed(in, timed, LYRICS_MAX_TIMED);
+        if (lyrics_cache_key_matches(rec_artist, rec_title, artist, title)) {
+            removed = 1;
+        } else {
+            Write(out, (APTR)"[lyrics]\nA:", 11);
+            Write(out, (APTR)rec_artist, cstrlen(rec_artist));
+            Write(out, (APTR)"\nT:", 3);
+            Write(out, (APTR)rec_title, cstrlen(rec_title));
+            sprintf(len_line, "\nL:%ld\n", len);
+            Write(out, (APTR)len_line, cstrlen(len_line));
+            Write(out, (APTR)body, len);
+            Write(out, (APTR)"\n", 1);
+            if (timed[0]) {
+                LONG tlen = cstrlen(timed);
+                sprintf(len_line, "TIMED:%ld\n", tlen);
+                Write(out, (APTR)len_line, cstrlen(len_line));
+                Write(out, (APTR)timed, tlen);
+                Write(out, (APTR)"\n", 1);
+            }
+        }
+    }
+
+    FreeMem(timed, LYRICS_MAX_TIMED);
+    FreeMem(body, LYRICS_MAX_TEXT);
+    Close(in);
+    Close(out);
+    if (removed) {
+        DeleteFile((STRPTR)LYRICS_CACHE_FILE);
+        Rename((STRPTR)LYRICS_CACHE_TMP_FILE, (STRPTR)LYRICS_CACHE_FILE);
+    } else {
+        DeleteFile((STRPTR)LYRICS_CACHE_TMP_FILE);
+    }
+    return removed;
+}
+
+static int fetch_lyrics_text(const char *artist, const char *title, char *lyrics, LONG lyrics_size, char *timed, LONG timed_size)
+{
+    char enc_artist[160];
+    char enc_title[160];
+    char url[512];
+    char *response;
+    char *body;
+    LONG response_len = 0;
+    LONG body_len = 0;
+    int ok = 0;
+
+    if (!lyrics || lyrics_size <= 0) return 0;
+    lyrics[0] = 0;
+    if (timed && timed_size > 0) timed[0] = 0;
+    response = (char *)AllocMem(LYRICS_MAX_RESPONSE, MEMF_PUBLIC | MEMF_CLEAR);
+    if (!response) { set_status("No memory for lyrics"); return 0; }
+
+    url_encode_component(enc_artist, sizeof(enc_artist), artist);
+    url_encode_component(enc_title, sizeof(enc_title), title);
+    strcpy(url, LYRICS_API_BASE "/lyrics/?artist=");
+    strncat(url, enc_artist, sizeof(url)-strlen(url)-1);
+    strncat(url, "&song=", sizeof(url)-strlen(url)-1);
+    strncat(url, enc_title, sizeof(url)-strlen(url)-1);
+    strncat(url, "&pass=true&sequence=1,2,3&timestamps=true", sizeof(url)-strlen(url)-1);
+
+    set_status("Loading lyrics...");
+    draw_status();
+    if (lyrics_http_get(url, response, LYRICS_MAX_RESPONSE, &response_len) && lyrics_http_body(response, response_len, &body, &body_len)) {
+        if (header_contains_token(response, "transfer-encoding:", "chunked")) body_len = decode_chunked_body(body, body_len);
+        if (strstr(response, " 200 ") || strstr(response, " 200 OK")) {
+            if (strstr(body, "\"status\"") && strstr(body, "success") && json_extract_string(body, "\"lyrics\"", lyrics, lyrics_size)) ok = 1;
+            else if (json_extract_string(body, "\"plain_lyrics\"", lyrics, lyrics_size)) ok = 1;
+            if (ok && timed && timed_size > 0) json_extract_timed_lyrics(body, timed, timed_size);
+        }
+    }
+    if (!ok && !g_status[0]) set_status("No lyrics found");
+    FreeMem(response, LYRICS_MAX_RESPONSE);
+    return ok;
+}
+
+static int lyrics_next_line(const char **pp, LONG max_chars, char *out, LONG out_size)
+{
+    const char *p;
+    LONG n = 0;
+    LONG last_space = -1;
+    if (!pp || !*pp || !out || out_size <= 0) return 0;
+    p = *pp;
+    if (!*p) return 0;
+    if (max_chars < 1) max_chars = 1;
+    while (p[n] && p[n] != '\n' && n < max_chars && n < out_size - 1) {
+        out[n] = p[n];
+        if (p[n] == ' ') last_space = n;
+        ++n;
+    }
+    if (p[n] && p[n] != '\n' && n >= max_chars && last_space > 8) n = last_space;
+    memcpy(out, p, n);
+    out[n] = 0;
+    p += n;
+    if (*p == '\n') ++p;
+    else while (*p == ' ') ++p;
+    *pp = p;
+    return 1;
+}
+
+static LONG lyrics_count_lines(const char *text, LONG max_chars)
+{
+    const char *p = text;
+    char tmp[160];
+    LONG count = 0;
+    while (lyrics_next_line(&p, max_chars, tmp, sizeof(tmp))) ++count;
+    return count > 0 ? count : 1;
+}
+
+static void lyrics_delete_button_bounds(struct Window *w, WORD *x1, WORD *y1, WORD *x2, WORD *y2)
+{
+    WORD right;
+    WORD bottom;
+    if (!w || !x1 || !y1 || !x2 || !y2) return;
+    right = (WORD)(w->Width - w->BorderRight - 8);
+    bottom = (WORD)(w->Height - w->BorderBottom - 8);
+    *x2 = right;
+    *x1 = (WORD)(right - 96);
+    if (*x1 < w->BorderLeft + 8) *x1 = (WORD)(w->BorderLeft + 8);
+    *y1 = (WORD)(bottom - 14);
+    *y2 = bottom;
+}
+
+static void draw_lyrics_window(struct Window *w, const char *artist, const char *title, const char *lyrics, LONG top)
+{
+    WORD left, right, y, bottom;
+    LONG max_chars;
+    LONG rows;
+    LONG total;
+    LONG i;
+    const char *p;
+    char line[180];
+    if (!w) return;
+    left = (WORD)(w->BorderLeft + 8);
+    right = (WORD)(w->Width - w->BorderRight - 8);
+    bottom = (WORD)(w->Height - w->BorderBottom - 28);
+    if (right < left) right = left;
+    SetAPen(w->RPort, 0);
+    RectFill(w->RPort, w->BorderLeft, (WORD)(w->BorderTop + 2), (WORD)(w->Width - w->BorderRight - 1), bottom);
+    SetAPen(w->RPort, 1);
+    SetBPen(w->RPort, 0);
+    SetDrMd(w->RPort, JAM1);
+    line[0] = 0;
+    strncat(line, artist ? artist : "", sizeof(line)-strlen(line)-1);
+    strncat(line, " - ", sizeof(line)-strlen(line)-1);
+    strncat(line, title ? title : "", sizeof(line)-strlen(line)-1);
+    clipped_window_text(w, left, (WORD)(w->BorderTop + 16), line);
+    Move(w->RPort, left, (WORD)(w->BorderTop + 24));
+    Draw(w->RPort, right, (WORD)(w->BorderTop + 24));
+    Draw(w->RPort, right, bottom);
+    Draw(w->RPort, left, bottom);
+    Draw(w->RPort, left, (WORD)(w->BorderTop + 24));
+    y = (WORD)(w->BorderTop + 38);
+    max_chars = (right - left - 30) / 8;
+    if (max_chars < 8) max_chars = 8;
+    rows = ((LONG)(bottom - y) / 11L) + 1L;
+    if (rows < 1) rows = 1;
+    total = lyrics_count_lines(lyrics, max_chars);
+    clamp_dialog_top(&top, total, rows);
+    p = lyrics;
+    for (i = 0; i < top; ++i) if (!lyrics_next_line(&p, max_chars, line, sizeof(line))) break;
+    for (i = 0; i < rows; ++i) {
+        if (!lyrics_next_line(&p, max_chars, line, sizeof(line))) break;
+        clipped_window_text(w, (WORD)(left + 4), (WORD)(y + i * 11), line);
+    }
+    draw_dialog_scroll_buttons(w, top, total, rows, y, bottom);
+    {
+        WORD bx1 = 0, by1 = 0, bx2 = 0, by2 = 0;
+        lyrics_delete_button_bounds(w, &bx1, &by1, &bx2, &by2);
+        draw_dialog_button(w, bx1, by1, bx2, by2, "Delete", 0);
+    }
+}
+
+static void lyrics_strip_timestamps_for_display(char *lyrics)
+{
+    char *p;
+    if (!lyrics) return;
+    p = strstr(lyrics, "\nTIMED:");
+    if (p) { *p = 0; return; }
+    p = strstr(lyrics, "\rTIMED:");
+    if (p) { *p = 0; return; }
+    if (starts_with(lyrics, "TIMED:")) lyrics[0] = 0;
+}
+
+static void show_lyrics_text_window(const char *artist, const char *title, const char *lyrics)
+{
+    struct NewWindow nw;
+    struct Window *w;
+    LONG top = 0;
+    int done = 0;
+    lyrics_strip_timestamps_for_display((char *)lyrics);
+    memset(&nw, 0, sizeof(nw));
+    apply_window_state(&nw, WINSTATE_LYRICS, 0, 0, 420, 260);
+    clamp_new_window_size(&nw, 260, 120, 640, 480);
+    nw.DetailPen = 0;
+    nw.BlockPen = 1;
+    nw.IDCMPFlags = IDCMP_CLOSEWINDOW | IDCMP_REFRESHWINDOW | IDCMP_MOUSEBUTTONS | IDCMP_NEWSIZE | IDCMP_RAWKEY;
+    nw.Flags = WFLG_CLOSEGADGET | WFLG_DRAGBAR | WFLG_DEPTHGADGET | WFLG_SIZEGADGET | WFLG_ACTIVATE | WFLG_SMART_REFRESH;
+    nw.MinWidth = 260;
+    nw.MinHeight = 120;
+    nw.MaxWidth = 640;
+    nw.MaxHeight = 480;
+    nw.Title = (UBYTE *)"Lyrics";
+    nw.Type = WBENCHSCREEN;
+    w = open_window_with_position_fallback(&nw);
+    if (!w) return;
+    draw_lyrics_window(w, artist, title, lyrics, top);
+    while (!done) {
+        ULONG sigmask = (1UL << w->UserPort->mp_SigBit) | g_timer.sigmask;
+        ULONG got_sig = Wait(sigmask);
+        if (got_sig & g_timer.sigmask) { service_stream_timer_signal(); process_stream_deferred(); }
+        while (1) {
+            struct IntuiMessage *msg = (struct IntuiMessage *)GetMsg(w->UserPort);
+            if (!msg) break;
+            if (msg->Class == IDCMP_CLOSEWINDOW) done = 1;
+            else if (msg->Class == IDCMP_REFRESHWINDOW) { BeginRefresh(w); EndRefresh(w, TRUE); draw_lyrics_window(w, artist, title, lyrics, top); }
+            else if (msg->Class == IDCMP_NEWSIZE) draw_lyrics_window(w, artist, title, lyrics, top);
+            else if (msg->Class == IDCMP_RAWKEY) {
+                UWORD raw = msg->Code & 0x7f;
+                if (raw == RAWKEY_UP) --top;
+                else if (raw == RAWKEY_DOWN) ++top;
+                draw_lyrics_window(w, artist, title, lyrics, top);
+            }
+            else if (msg->Class == IDCMP_MOUSEBUTTONS && msg->Code == SELECTDOWN) {
+                WORD left = (WORD)(w->BorderLeft + 8);
+                WORD right = (WORD)(w->Width - w->BorderRight - 8);
+                WORD y = (WORD)(w->BorderTop + 38);
+                WORD bottom = (WORD)(w->Height - w->BorderBottom - 28);
+                WORD bx1 = 0, by1 = 0, bx2 = 0, by2 = 0;
+                LONG max_chars = (right - left - 30) / 8;
+                LONG rows = ((LONG)(bottom - y) / 11L) + 1L;
+                LONG total;
+                lyrics_delete_button_bounds(w, &bx1, &by1, &bx2, &by2);
+                if (point_in_box(msg->MouseX, msg->MouseY, bx1, by1, bx2, by2)) {
+                    draw_dialog_button(w, bx1, by1, bx2, by2, "Delete", 1);
+                    Delay(2);
+                    if (lyrics_cache_delete(artist, title)) set_status("Lyrics removed from cache");
+                    else set_status("Lyrics not in cache");
+                    draw_status();
+                    draw_lyrics_window(w, artist, title, lyrics, top);
+                } else {
+                    if (max_chars < 8) max_chars = 8;
+                    if (rows < 1) rows = 1;
+                    total = lyrics_count_lines(lyrics, max_chars);
+                    if (dialog_handle_scroll_click(w, msg->MouseX, msg->MouseY, &top, total, rows, y, bottom)) draw_lyrics_window(w, artist, title, lyrics, top);
+                }
+            }
+            ReplyMsg((struct Message *)msg);
+        }
+    }
+    remember_window_state(WINSTATE_LYRICS, w);
+    CloseWindow(w);
+}
+
+static void show_lyrics_window(void)
+{
+    char artist[TITLE_LEN];
+    char title[TITLE_LEN];
+    char *lyrics;
+    char *timed;
+    int cache_hit = 0;
+    int was_playing_file;
+    int fetched = 0;
+
+    if (g_selected < 0 || g_selected >= g_result_count || !g_results[g_selected].is_file) {
+        set_status("Lyrics only for local files");
+        draw_status();
+        return;
+    }
+    if (!derive_lyrics_artist_title(artist, sizeof(artist), title, sizeof(title))) {
+        set_status("No artist/title for lyrics");
+        draw_status();
+        return;
+    }
+    lyrics = (char *)AllocMem(LYRICS_MAX_TEXT, MEMF_PUBLIC | MEMF_CLEAR);
+    if (!lyrics) { set_status("No memory for lyrics"); draw_status(); return; }
+    timed = (char *)AllocMem(LYRICS_MAX_TIMED, MEMF_PUBLIC | MEMF_CLEAR);
+    if (!timed) { FreeMem(lyrics, LYRICS_MAX_TEXT); set_status("No memory for lyrics"); draw_status(); return; }
+
+    cache_hit = lyrics_cache_load(artist, title, lyrics, LYRICS_MAX_TEXT);
+
+    if (cache_hit) {
+        set_status("Lyrics loaded from cache");
+        draw_status();
+        show_lyrics_text_window(artist, title, lyrics);
+        FreeMem(timed, LYRICS_MAX_TIMED);
+        FreeMem(lyrics, LYRICS_MAX_TEXT);
+        return;
+    }
+
+    was_playing_file = g_stream.active && g_stream.started && g_stream.file_fh != 0;
+    if (was_playing_file) {
+        set_status("Stopping playback for lyrics...");
+        draw_status();
+        stop_stream();
+    }
+
+    fetched = fetch_lyrics_text(artist, title, lyrics, LYRICS_MAX_TEXT, timed, LYRICS_MAX_TIMED);
+    if (fetched) {
+        lyrics_cache_save(artist, title, lyrics, timed);
+    } else {
+        strcpy(lyrics, "No Lyrics found");
+        lyrics_cache_save(artist, title, lyrics, timed);
+    }
+
+    if (was_playing_file) play_selected();
+
+    if (fetched) {
+        set_status("Lyrics loaded");
+    } else {
+        set_status("No Lyrics found");
+    }
+    draw_status();
+    show_lyrics_text_window(artist, title, lyrics);
+    FreeMem(timed, LYRICS_MAX_TIMED);
+    FreeMem(lyrics, LYRICS_MAX_TEXT);
+}
+
+
+
+static int fetch_selected_lyrics_to_cache(void)
+{
+    char artist[TITLE_LEN];
+    char title[TITLE_LEN];
+    char *lyrics;
+    char *timed;
+    int fetched;
+
+    if (g_selected < 0 || g_selected >= g_result_count || !g_results[g_selected].is_file) return 0;
+    if (!derive_lyrics_artist_title(artist, sizeof(artist), title, sizeof(title))) return 0;
+    lyrics = (char *)AllocMem(LYRICS_MAX_TEXT, MEMF_PUBLIC | MEMF_CLEAR);
+    if (!lyrics) { set_status("No memory for lyrics"); draw_status(); return 0; }
+    timed = (char *)AllocMem(LYRICS_MAX_TIMED, MEMF_PUBLIC | MEMF_CLEAR);
+    if (!timed) { FreeMem(lyrics, LYRICS_MAX_TEXT); set_status("No memory for lyrics"); draw_status(); return 0; }
+
+    fetched = fetch_lyrics_text(artist, title, lyrics, LYRICS_MAX_TEXT, timed, LYRICS_MAX_TIMED);
+    if (fetched) {
+        lyrics_cache_save(artist, title, lyrics, timed);
+    } else {
+        strcpy(lyrics, "No Lyrics found");
+        lyrics_cache_save(artist, title, lyrics, timed);
+        timed[0] = 0;
+    }
+    FreeMem(timed, LYRICS_MAX_TIMED);
+    FreeMem(lyrics, LYRICS_MAX_TEXT);
+    return fetched;
+}
+
+static int selected_lyrics_cache_exists(void)
+{
+    char artist[TITLE_LEN];
+    char title[TITLE_LEN];
+    char *lyrics;
+    int ok;
+    if (g_selected < 0 || g_selected >= g_result_count || !g_results[g_selected].is_file) return 0;
+    if (!derive_lyrics_artist_title(artist, sizeof(artist), title, sizeof(title))) return 0;
+    lyrics = (char *)AllocMem(256, MEMF_PUBLIC | MEMF_CLEAR);
+    if (!lyrics) return 0;
+    ok = lyrics_cache_load(artist, title, lyrics, 256);
+    FreeMem(lyrics, 256);
+    return ok;
+}
+
+static int load_selected_timed_from_cache(void)
+{
+    char artist[TITLE_LEN];
+    char title[TITLE_LEN];
+    LONG secs;
+    g_current_timed[0] = 0;
+    g_sing_line[0] = 0;
+    g_sing_next_line[0] = 0;
+    if (g_selected < 0 || g_selected >= g_result_count || !g_results[g_selected].is_file) return 0;
+    if (!derive_lyrics_artist_title(artist, sizeof(artist), title, sizeof(title))) return 0;
+    lyrics_cache_load_timed(artist, title, g_current_timed, LYRICS_MAX_TIMED);
+    secs = current_play_elapsed_secs();
+    timed_find_lines_for_ms(secs * 1000L, g_sing_line, sizeof(g_sing_line), g_sing_next_line, sizeof(g_sing_next_line));
+    return g_current_timed[0] != 0;
+}
+
+static void process_pending_lyrics_enable(void)
+{
+    if (!g_pending_lyrics_enable) return;
+    g_pending_lyrics_enable = 0;
+    if (!g_lyrics_on) return;
+    if (ensure_selected_lyrics_cache(1)) {
+        load_selected_timed_from_cache();
+        set_status("Ready.");
+        draw_status();
+    } else {
+        g_lyrics_on = 0;
+        g_sing_line[0] = 0;
+        g_sing_next_line[0] = 0;
+        draw_ui();
+        draw_status();
+    }
+}
+
+static int ensure_selected_lyrics_cache(int restart_playback)
+{
+    int was_playing_file;
+    if (selected_lyrics_cache_exists()) return 1;
+    was_playing_file = restart_playback && g_stream.active && g_stream.started && g_stream.file_fh != 0;
+    if (was_playing_file) {
+        set_status("Stopping playback for lyrics...");
+        draw_status();
+        stop_stream();
+    }
+    fetch_selected_lyrics_to_cache();
+    if (was_playing_file) play_selected();
+    return selected_lyrics_cache_exists();
 }
 
 static void icy_clear(void)
@@ -3262,6 +4631,10 @@ static void stop_stream(void)
     g_play_draw_secs = -1;
     g_play_clock_valid = 0;
     g_status_tick = 0;
+    g_current_timed[0] = 0;
+    g_sing_line[0] = 0;
+    g_sing_next_line[0] = 0;
+    g_sing_draw_secs = -1;
     set_status("Stopped");
     draw_ui();
 }
@@ -3398,8 +4771,15 @@ static void play_selected(void)
     g_play_duration_secs = 0;
     g_play_draw_secs = -1;
     g_play_clock_valid = 0;
+    g_current_timed[0] = 0;
+    g_sing_line[0] = 0;
+    g_sing_next_line[0] = 0;
+    g_sing_draw_secs = -1;
 
     if (g_results[g_selected].is_file) {
+        if (g_lyrics_on && !selected_lyrics_cache_exists()) {
+            fetch_selected_lyrics_to_cache();
+        }
         set_status("Opening MP3 file...");
         draw_status();
         g_stream.file_fh = Open((STRPTR)g_results[g_selected].url, MODE_OLDFILE);
@@ -3424,6 +4804,9 @@ static void play_selected(void)
         copy_trim(g_icy_title, sizeof(g_icy_title), g_results[g_selected].title, cstrlen(g_results[g_selected].title));
         copy_trim(g_icy_genre, sizeof(g_icy_genre), g_results[g_selected].genre, cstrlen(g_results[g_selected].genre));
         if (g_results[g_selected].bitrate > 0) sprintf(g_icy_bitrate, "%ldk", g_results[g_selected].bitrate);
+        if (g_results[g_selected].artist[0] && g_results[g_selected].title[0]) {
+            lyrics_cache_load_timed(g_results[g_selected].artist, g_results[g_selected].title, g_current_timed, LYRICS_MAX_TIMED);
+        }
         g_icy_dirty = 1;
     }
     else {
@@ -3501,8 +4884,9 @@ static void setup_gadgets(void)
     INIT_BUTTON(g_stop_gad, &g_prev_gad, 144, 16, 52, &g_txt_stop, GID_STOP);
     INIT_BUTTON(g_prev_gad, &g_next_gad, 204, 16, 52, &g_txt_prev, GID_PREV);
     INIT_BUTTON(g_next_gad, &g_del_gad, 264, 16, 52, &g_txt_next, GID_NEXT);
-    INIT_BUTTON(g_del_gad, &g_quit_gad, 324, 16, 44, &g_txt_del, GID_DEL);
-    INIT_BUTTON(g_quit_gad, 0, 376, 16, 44, &g_txt_quit, GID_QUIT);
+    INIT_BUTTON(g_del_gad, &g_lyrics_gad, 324, 16, 44, &g_txt_del, GID_DEL);
+    INIT_BUTTON(g_lyrics_gad, &g_quit_gad, 376, 16, 56, &g_txt_lyrics, GID_LYRICS);
+    INIT_BUTTON(g_quit_gad, 0, 440, 16, 44, &g_txt_quit, GID_QUIT);
 #undef INIT_BUTTON
 }
 
@@ -3556,7 +4940,25 @@ int main(void)
             else if (msg->Class == IDCMP_REFRESHWINDOW) { BeginRefresh(g_win); EndRefresh(g_win, TRUE); draw_ui(); refresh_button_row(); }
             else if (msg->Class == IDCMP_NEWSIZE) { draw_ui(); refresh_button_row(); }
             else if (msg->Class == IDCMP_MOUSEBUTTONS) {
-                if (msg->Code == SELECTDOWN && msg->MouseX >= win_left() && msg->MouseY >= list_rows_top() && msg->MouseY <= list_bottom()) {
+                if (msg->Code == SELECTDOWN && lyrics_checkbox_hit(msg->MouseX, msg->MouseY)) {
+                    if (g_stream.active && g_stream.started) {
+                        set_status("Stop playback before changing lyrics");
+                        draw_status();
+                    } else {
+                        if (g_lyrics_on) {
+                            g_lyrics_on = 0;
+                            g_pending_lyrics_enable = 0;
+                            g_sing_line[0] = 0;
+                            g_sing_next_line[0] = 0;
+                        } else {
+                            g_lyrics_on = 1;
+                            g_pending_lyrics_enable = 1;
+                        }
+                        draw_ui();
+                        draw_status();
+                    }
+                }
+                else if (msg->Code == SELECTDOWN && msg->MouseX >= win_left() && msg->MouseY >= list_rows_top() && msg->MouseY <= list_bottom()) {
                     LONG row = (msg->MouseY - list_rows_top()) / 11;
                     LONG idx = g_list_top + row;
                     if (row >= 0 && idx >= 0 && idx < g_result_count) {
@@ -3594,11 +4996,13 @@ int main(void)
                     case GID_PREV: select_relative(-1); break;
                     case GID_NEXT: select_relative(1); break;
                     case GID_DEL: remove_selected_file(); break;
+                    case GID_LYRICS: show_lyrics_window(); break;
                     case GID_QUIT: done = 1; break;
                 }
             }
             ReplyMsg((struct Message *)msg);
         }
+        process_pending_lyrics_enable();
     }
 out:
     stop_stream();
