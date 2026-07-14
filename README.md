@@ -40,3 +40,7 @@ Implementation note:
 
 The current backend uses the proven MAS-Player V1.3 style inside MASWaver: MAS hardware initialization and byte output are handled directly, while playback data is fed from a CIA-B timer interrupt. The current stable path buffers a stream chunk first and then plays it from the embedded MAS buffer.
 
+
+Playback backend architecture:
+
+MASWaver's player and streaming code now uses an internal backend-neutral API. The only selectable implementation in this phase remains the existing Direct MAS backend, so playback behavior and configuration are unchanged. This boundary prepares a later optional MHI implementation without coupling MHI lifecycle or buffer handling to the user interface and network code.

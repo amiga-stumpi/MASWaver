@@ -27,7 +27,7 @@
 #include <string.h>
 #include <stdio.h>
 
-#include "mas_direct.h"
+#include "audio_backend.h"
 
 
 #define APP_TITLE "MASWaver v1.2"
@@ -1515,9 +1515,9 @@ static LONG sound_x_to_value(WORD mx, LONG min, LONG max, WORD x1, WORD x2)
 
 static void sound_apply(void)
 {
-    mas_direct_set_bass_step(g_sound_bass);
-    mas_direct_set_treble_step(g_sound_treble);
-    mas_direct_set_volume_step(g_sound_volume);
+    audio_backend_set_bass_step(g_sound_bass);
+    audio_backend_set_treble_step(g_sound_treble);
+    audio_backend_set_volume_step(g_sound_volume);
 }
 
 static void sound_defaults(void)
@@ -1611,7 +1611,7 @@ static int handle_sound_click(struct Window *w, WORD mx, WORD my)
         new_value = sound_x_to_value(mx, -5, 5, (WORD)(w->BorderLeft + 78), (WORD)(w->BorderLeft + 232));
         if (new_value != g_sound_bass) {
             g_sound_bass = new_value;
-            mas_direct_set_bass_step(g_sound_bass);
+            audio_backend_set_bass_step(g_sound_bass);
             draw_sound_slider(w, yb, g_sound_bass, -5, 5);
             draw_sound_value(w, (WORD)(w->BorderLeft + 246), (WORD)(yb + 3), g_sound_bass);
         }
@@ -1621,7 +1621,7 @@ static int handle_sound_click(struct Window *w, WORD mx, WORD my)
         new_value = sound_x_to_value(mx, -5, 5, (WORD)(w->BorderLeft + 78), (WORD)(w->BorderLeft + 232));
         if (new_value != g_sound_treble) {
             g_sound_treble = new_value;
-            mas_direct_set_treble_step(g_sound_treble);
+            audio_backend_set_treble_step(g_sound_treble);
             draw_sound_slider(w, yt, g_sound_treble, -5, 5);
             draw_sound_value(w, (WORD)(w->BorderLeft + 246), (WORD)(yt + 3), g_sound_treble);
         }
@@ -1631,7 +1631,7 @@ static int handle_sound_click(struct Window *w, WORD mx, WORD my)
         new_value = sound_x_to_value(mx, 0, 10, (WORD)(w->BorderLeft + 78), (WORD)(w->BorderLeft + 232));
         if (new_value != g_sound_volume) {
             g_sound_volume = new_value;
-            mas_direct_set_volume_step(g_sound_volume);
+            audio_backend_set_volume_step(g_sound_volume);
             draw_sound_slider(w, yv, g_sound_volume, 0, 10);
             draw_sound_value(w, (WORD)(w->BorderLeft + 246), (WORD)(yv + 3), g_sound_volume);
         }
@@ -4674,7 +4674,7 @@ static int stream_open_direct(const char *url)
 static void stop_stream(void)
 {
     timer_stop();
-    mas_direct_stop();
+    audio_backend_stop();
     if (g_stream.active) stream_close_transport();
     icy_clear();
     g_stream.active = 0;
@@ -4698,10 +4698,10 @@ static int stream_pump_socket(void)
     int got_data = 0;
 
     if (!g_stream.active || (!g_stream.file_fh && g_stream.fd < 0)) return 0;
-    while (reads < MAX_PUMP_READS && mas_direct_buffer_free() >= STREAM_NET_CHUNK) {
+    while (reads < MAX_PUMP_READS && audio_backend_buffer_free() >= STREAM_NET_CHUNK) {
         LONG n = stream_read_audio(g_net_buf, STREAM_NET_CHUNK);
         if (n <= 0) break;
-        if (mas_direct_write(g_net_buf, (ULONG)n) != (ULONG)n) break;
+        if (audio_backend_write(g_net_buf, (ULONG)n) != (ULONG)n) break;
         g_total_stream_bytes += (ULONG)n;
         if (g_icy_dirty) {
             g_icy_dirty = 0;
@@ -4727,7 +4727,7 @@ static void service_stream_timer_signal(void)
         ULONG used;
         if (g_stream.file_fh) ++g_play_elapsed_ticks;
         got_data = stream_pump_socket();
-        used = mas_direct_buffer_used();
+        used = audio_backend_buffer_used();
         if (g_stream.file_fh) {
             LONG secs = current_play_elapsed_secs();
             if (g_play_duration_secs > 0 && secs > g_play_duration_secs) secs = g_play_duration_secs;
@@ -4736,7 +4736,7 @@ static void service_stream_timer_signal(void)
                 draw_play_time();
             }
         }
-        if (mas_direct_had_underrun()) {
+        if (audio_backend_had_underrun()) {
             if (g_file_eof && g_selected + 1 < g_result_count && g_results[g_selected + 1].is_file) queue_stream_end_action(DEFER_STREAM_NEXT_FILE);
             else if (g_file_eof) queue_stream_end_action(DEFER_STREAM_EOF_STOP);
             else queue_stream_end_action(DEFER_STREAM_UNDERRUN_STOP);
@@ -4760,7 +4760,7 @@ static void process_stream_deferred(void)
     if (!action) return;
     g_deferred_stream_action = DEFER_STREAM_NONE;
 
-    mas_direct_stop();
+    audio_backend_stop();
     if (action == DEFER_STREAM_NEXT_FILE) {
         stream_close_transport();
         g_stream.active = 0;
@@ -4781,34 +4781,34 @@ static void process_stream_deferred(void)
 static int stream_prebuffer(void)
 {
     g_total_stream_bytes = 0;
-    while (mas_direct_buffer_used() < PREBUFFER_BYTES) {
+    while (audio_backend_buffer_used() < PREBUFFER_BYTES) {
         LONG n = stream_read_audio(g_net_buf, STREAM_NET_CHUNK);
         if (n <= 0) break;
-        if (mas_direct_write(g_net_buf, (ULONG)n) != (ULONG)n) return 0;
+        if (audio_backend_write(g_net_buf, (ULONG)n) != (ULONG)n) return 0;
         g_total_stream_bytes += (ULONG)n;
         if (g_icy_dirty) {
             g_icy_dirty = 0;
             draw_status();
         }
         if ((g_total_stream_bytes & 0x7fffUL) == 0) {
-            sprintf(g_status_scratch, "Prebuffering %ld/%ld KB...", (LONG)(mas_direct_buffer_used() / 1024UL), (LONG)(PREBUFFER_BYTES / 1024UL));
+            sprintf(g_status_scratch, "Prebuffering %ld/%ld KB...", (LONG)(audio_backend_buffer_used() / 1024UL), (LONG)(PREBUFFER_BYTES / 1024UL));
             set_status(g_status_scratch);
             draw_status();
         }
     }
-    return mas_direct_buffer_used() >= MAS_DIRECT_NEED_PREBUFFER;
+    return audio_backend_buffer_used() >= audio_backend_min_prebuffer();
 }
 
 static int local_start_fill(void)
 {
     g_total_stream_bytes = 0;
-    while (mas_direct_buffer_used() < LOCAL_START_BYTES) {
+    while (audio_backend_buffer_used() < LOCAL_START_BYTES) {
         LONG n = stream_read_audio(g_net_buf, STREAM_NET_CHUNK);
         if (n <= 0) break;
-        if (mas_direct_write(g_net_buf, (ULONG)n) != (ULONG)n) return 0;
+        if (audio_backend_write(g_net_buf, (ULONG)n) != (ULONG)n) return 0;
         g_total_stream_bytes += (ULONG)n;
     }
-    return mas_direct_buffer_used() > 0;
+    return audio_backend_buffer_used() > 0;
 }
 
 static void play_selected(void)
@@ -4881,7 +4881,7 @@ static void play_selected(void)
         }
     }
 
-    if (!mas_direct_prepare()) {
+    if (!audio_backend_prepare()) {
         set_status("MAS buffer init failed");
         draw_ui();
         stream_close_transport();
@@ -4917,9 +4917,9 @@ static void play_selected(void)
         LONG nonblock = 1;
         IoctlSocket(g_stream.fd, FIONBIO, &nonblock);
     }
-    mas_direct_reset();
+    audio_backend_reset();
     sound_apply();
-    mas_direct_start();
+    audio_backend_start();
     g_stream.started = 1;
     if (g_stream.file_fh) start_play_clock();
     g_status_tick = 0;
@@ -5059,7 +5059,7 @@ int main(void)
     }
 out:
     stop_stream();
-    mas_direct_shutdown();
+    audio_backend_shutdown();
     if (g_win) { remember_window_state(WINSTATE_MAIN, g_win); ClearMenuStrip(g_win); CloseWindow(g_win); g_win = 0; }
     save_window_states();
     timer_cleanup();
