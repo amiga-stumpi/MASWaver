@@ -26,7 +26,6 @@ static ULONG g_buffered;
 static ULONG g_played;
 static int g_active;
 static int g_input_ended;
-
 static void set_error(const char *text)
 {
     if (!text) text = "MHI error";
@@ -81,9 +80,11 @@ static void free_buffers(void)
 
 static int queue_buffer(int index)
 {
+    BOOL queued;
     if (!g_handle || index < 0 || index >= MHI_BUFFER_COUNT ||
         g_states[index] != 1 || g_lengths[index] == 0) return 0;
-    if (!mhi_call_queue_buffer(g_handle, g_buffers[index], g_lengths[index])) {
+    queued = mhi_call_queue_buffer(g_handle, g_buffers[index], g_lengths[index]);
+    if (!queued) {
         set_error("MHI buffer queue failed");
         return 0;
     }
@@ -103,7 +104,7 @@ static void reclaim_buffers(void)
 {
     APTR ptr;
     int index;
-    if (!g_handle) return;
+    if (!g_handle || !g_active) return;
     while ((ptr = mhi_call_get_empty(g_handle)) != 0) {
         index = buffer_index(ptr);
         if (index >= 0 && g_states[index] == 2) {
@@ -152,8 +153,8 @@ void mhi_backend_start(void)
 {
     if (!g_handle) return;
     queue_partial_buffers();
-    mhi_call_play(g_handle);
     g_active = 1;
+    mhi_call_play(g_handle);
 }
 
 void mhi_backend_stop(void)
@@ -212,7 +213,6 @@ ULONG mhi_backend_buffer_free(void)
 {
     ULONG free_bytes = 0;
     int i;
-    reclaim_buffers();
     for (i = 0; i < MHI_BUFFER_COUNT; ++i) {
         if (g_states[i] == 0) free_bytes += MHI_BUFFER_SIZE;
         else if (g_states[i] == 1) free_bytes += MHI_BUFFER_SIZE - g_lengths[i];
@@ -222,13 +222,11 @@ ULONG mhi_backend_buffer_free(void)
 
 ULONG mhi_backend_buffer_used(void)
 {
-    reclaim_buffers();
     return g_buffered;
 }
 
 ULONG mhi_backend_bytes_played(void)
 {
-    reclaim_buffers();
     return g_played;
 }
 
@@ -237,7 +235,6 @@ ULONG mhi_backend_write(const UBYTE *data, ULONG len)
     ULONG done = 0;
     int i;
     if (!g_handle || !data) return 0;
-    reclaim_buffers();
     while (done < len) {
         int index = -1;
         ULONG room;
@@ -271,7 +268,6 @@ ULONG mhi_backend_write(const UBYTE *data, ULONG len)
 int mhi_backend_had_underrun(void)
 {
     if (!g_active || !g_handle) return 0;
-    reclaim_buffers();
     return mhi_call_get_status(g_handle) == MHIF_OUT_OF_DATA && g_buffered == 0 && !g_input_ended;
 }
 
@@ -281,7 +277,7 @@ void mhi_backend_clear_underrun(void)
 
 void mhi_backend_service(void)
 {
-    if (!g_handle) return;
+    if (!g_handle || !g_active) return;
     reclaim_buffers();
     if (g_input_ended) queue_partial_buffers();
     if (g_active && g_buffered > 0 && mhi_call_get_status(g_handle) == MHIF_OUT_OF_DATA)

@@ -692,6 +692,8 @@ static void show_lyrics_window(void);
 static int ensure_selected_lyrics_cache(int restart_playback);
 static void draw_ui(void);
 static void stop_stream(void);
+static int stream_pump_socket(void);
+static void service_audio_backend_signal(void);
 static void service_stream_timer_signal(void);
 static void process_stream_deferred(void);
 static void format_duration(char *out, LONG out_size, LONG secs);
@@ -1254,7 +1256,7 @@ static void save_filelist_m3u(void)
         ULONG sigmask = (1UL << w->UserPort->mp_SigBit) | g_timer.sigmask;
         ULONG got_sig = Wait(sigmask | audio_backend_signal_mask());
         if (got_sig & g_timer.sigmask) { service_stream_timer_signal(); process_stream_deferred(); }
-        if (got_sig & audio_backend_signal_mask()) audio_backend_service();
+        if (got_sig & audio_backend_signal_mask()) service_audio_backend_signal();
         while (1) {
             struct IntuiMessage *msg = (struct IntuiMessage *)GetMsg(w->UserPort);
             if (!msg) break;
@@ -1709,7 +1711,7 @@ static void show_sound_window(void)
         ULONG sigmask = (1UL << w->UserPort->mp_SigBit) | g_timer.sigmask;
         ULONG got_sig = Wait(sigmask | audio_backend_signal_mask());
         if (got_sig & g_timer.sigmask) { service_stream_timer_signal(); process_stream_deferred(); }
-        if (got_sig & audio_backend_signal_mask()) audio_backend_service();
+        if (got_sig & audio_backend_signal_mask()) service_audio_backend_signal();
         while (1) {
             struct IntuiMessage *msg = (struct IntuiMessage *)GetMsg(w->UserPort);
             if (!msg) break;
@@ -1752,7 +1754,7 @@ static void show_info_window(void)
         ULONG sigmask = (1UL << w->UserPort->mp_SigBit) | g_timer.sigmask;
         ULONG got_sig = Wait(sigmask | audio_backend_signal_mask());
         if (got_sig & g_timer.sigmask) { service_stream_timer_signal(); process_stream_deferred(); }
-        if (got_sig & audio_backend_signal_mask()) audio_backend_service();
+        if (got_sig & audio_backend_signal_mask()) service_audio_backend_signal();
         while (1) {
             struct IntuiMessage *msg = (struct IntuiMessage *)GetMsg(w->UserPort);
             if (!msg) break;
@@ -2413,7 +2415,7 @@ static void show_playlist_file_window(void)
         ULONG sigmask = (1UL << w->UserPort->mp_SigBit) | g_timer.sigmask;
         ULONG got_sig = Wait(sigmask | audio_backend_signal_mask());
         if (got_sig & g_timer.sigmask) { service_stream_timer_signal(); process_stream_deferred(); }
-        if (got_sig & audio_backend_signal_mask()) audio_backend_service();
+        if (got_sig & audio_backend_signal_mask()) service_audio_backend_signal();
         while (1) {
             struct IntuiMessage *msg = (struct IntuiMessage *)GetMsg(w->UserPort);
             if (!msg) break;
@@ -3163,7 +3165,7 @@ static void show_file_add_window_mode(int dir_mode)
         ULONG sigmask = (1UL << w->UserPort->mp_SigBit) | g_timer.sigmask;
         ULONG got_sig = Wait(sigmask | audio_backend_signal_mask());
         if (got_sig & g_timer.sigmask) { service_stream_timer_signal(); process_stream_deferred(); }
-        if (got_sig & audio_backend_signal_mask()) audio_backend_service();
+        if (got_sig & audio_backend_signal_mask()) service_audio_backend_signal();
         while (1) {
             struct IntuiMessage *msg = (struct IntuiMessage *)GetMsg(w->UserPort);
             if (!msg) break;
@@ -4143,7 +4145,7 @@ static void show_lyrics_text_window(const char *artist, const char *title, const
         ULONG sigmask = (1UL << w->UserPort->mp_SigBit) | g_timer.sigmask;
         ULONG got_sig = Wait(sigmask | audio_backend_signal_mask());
         if (got_sig & g_timer.sigmask) { service_stream_timer_signal(); process_stream_deferred(); }
-        if (got_sig & audio_backend_signal_mask()) audio_backend_service();
+        if (got_sig & audio_backend_signal_mask()) service_audio_backend_signal();
         while (1) {
             struct IntuiMessage *msg = (struct IntuiMessage *)GetMsg(w->UserPort);
             if (!msg) break;
@@ -4762,6 +4764,12 @@ static int stream_pump_socket(void)
     return got_data;
 }
 
+static void service_audio_backend_signal(void)
+{
+    audio_backend_service();
+    if (g_stream.active && g_stream.started) stream_pump_socket();
+}
+
 static void queue_stream_end_action(UBYTE action)
 {
     if (!g_deferred_stream_action) g_deferred_stream_action = action;
@@ -4771,7 +4779,6 @@ static void queue_stream_end_action(UBYTE action)
 static void service_stream_timer_signal(void)
 {
     if (!timer_drain()) return;
-    audio_backend_service();
     if (g_stream.active && g_stream.started) {
         int got_data;
         ULONG used;
@@ -4851,8 +4858,10 @@ static int stream_prebuffer(void)
 
 static int local_start_fill(void)
 {
+    ULONG target = audio_backend_min_prebuffer();
+    if (target < LOCAL_START_BYTES) target = LOCAL_START_BYTES;
     g_total_stream_bytes = 0;
-    while (audio_backend_buffer_used() < LOCAL_START_BYTES) {
+    while (audio_backend_buffer_used() < target) {
         LONG n = stream_read_audio(g_net_buf, STREAM_NET_CHUNK);
         if (n <= 0) break;
         if (audio_backend_write(g_net_buf, (ULONG)n) != (ULONG)n) return 0;
@@ -5041,7 +5050,7 @@ int main(void)
     while (!done) {
         ULONG got_sig = Wait(sigmask | audio_backend_signal_mask());
         if (got_sig & g_timer.sigmask) { service_stream_timer_signal(); process_stream_deferred(); }
-        if (got_sig & audio_backend_signal_mask()) audio_backend_service();
+        if (got_sig & audio_backend_signal_mask()) service_audio_backend_signal();
         while (g_win && g_win->UserPort) {
             struct IntuiMessage *msg = (struct IntuiMessage *)GetMsg(g_win->UserPort);
             if (!msg) break;

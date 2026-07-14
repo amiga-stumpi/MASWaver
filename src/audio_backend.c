@@ -52,7 +52,7 @@ static const struct AudioBackendOps g_mhi_backend = {
     mhi_backend_buffer_used, mhi_backend_bytes_played, mhi_backend_write,
     mhi_backend_had_underrun, mhi_backend_clear_underrun,
     mhi_backend_service, mhi_backend_end_input, mhi_backend_signal_mask,
-    mhi_backend_last_error, 32768UL, "MHI"
+    mhi_backend_last_error, 131072UL, "MHI"
 };
 
 static const struct AudioBackendOps *g_backend = &g_direct_backend;
