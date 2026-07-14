@@ -17,7 +17,7 @@ struct Library *MHIBase;
 static UBYTE *g_buffers[MHI_BUFFER_COUNT];
 static ULONG g_lengths[MHI_BUFFER_COUNT];
 static UBYTE g_states[MHI_BUFFER_COUNT];
-static char g_driver[MHI_DRIVER_NAME_SIZE] = "DEVS:MHI/prismamhi.device";
+static char g_driver[MHI_DRIVER_NAME_SIZE] = "LIBS:MHI/prismamhi.library";
 static char g_error[96];
 static APTR g_handle;
 static BYTE g_signal = -1;

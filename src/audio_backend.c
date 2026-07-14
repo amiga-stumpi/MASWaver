@@ -78,10 +78,10 @@ void audio_backend_configure(const char *mode, const char *mhi_driver)
     mhi_backend_set_driver(mhi_driver);
 }
 
-void audio_backend_select(int local_file)
+void audio_backend_select(void)
 {
     const struct AudioBackendOps *wanted = &g_direct_backend;
-    if (local_file && g_mode != AUDIO_BACKEND_MODE_DIRECT) wanted = &g_mhi_backend;
+    if (g_mode != AUDIO_BACKEND_MODE_DIRECT) wanted = &g_mhi_backend;
     if (wanted == g_backend) return;
     g_backend->shutdown();
     g_backend = wanted;

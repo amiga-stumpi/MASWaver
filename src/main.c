@@ -212,7 +212,7 @@ static LONG g_sound_volume = 10;
 static UBYTE g_lyrics_on;
 static UBYTE g_pending_lyrics_enable;
 static char g_audio_backend_mode[16] = "direct";
-static char g_mhi_device[128] = "DEVS:MHI/prismamhi.device";
+static char g_mhi_device[128] = "LIBS:MHI/prismamhi.library";
 static char g_config_buf[512];
 static char g_current_timed[LYRICS_MAX_TIMED];
 static char g_sing_line[180];
@@ -4940,7 +4940,7 @@ static void play_selected(void)
         }
     }
 
-    audio_backend_select(g_stream.file_fh != 0);
+    audio_backend_select();
     if (!audio_backend_prepare()) {
         set_status(audio_backend_last_error());
         draw_ui();

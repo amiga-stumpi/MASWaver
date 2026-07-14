@@ -8,7 +8,7 @@
 #define AUDIO_BACKEND_MODE_AUTO 2
 
 void audio_backend_configure(const char *mode, const char *mhi_driver);
-void audio_backend_select(int local_file);
+void audio_backend_select(void);
 int audio_backend_prepare(void);
 void audio_backend_reset(void);
 void audio_backend_shutdown(void);

@@ -43,11 +43,11 @@ The current backend uses the proven MAS-Player V1.3 style inside MASWaver: MAS h
 
 Playback backend architecture:
 
-MASWaver's player and streaming code now uses an internal backend-neutral API. The only selectable implementation in this phase remains the existing Direct MAS backend, so playback behavior and configuration are unchanged. This boundary prepares a later optional MHI implementation without coupling MHI lifecycle or buffer handling to the user interface and network code.
+MASWaver's player and streaming code uses an internal backend-neutral API. Direct MAS and optional MHI implementations share the same file, network, timing and user-interface paths, while keeping their hardware lifecycle and buffer handling isolated.
 
-## Optional MHI backend (Phase 2)
+## Optional MHI backend (Phase 3)
 
-Local MP3 files can optionally use an installed MHI decoder library. Internet streams continue to use the Direct MAS backend in this phase.
+Local MP3 files and HTTP MP3 streams can use an installed MHI decoder library. The Direct MAS backend remains available unchanged.
 
 `MASWaver.conf` is read from the program directory:
 
@@ -55,13 +55,13 @@ Local MP3 files can optionally use an installed MHI decoder library. Internet st
 # Existing Direct MAS behavior
 audio_backend=direct
 
-# Require MHI for local files
+# Require MHI for files and streams
 audio_backend=mhi
-mhidevice=DEVS:MHI/prismamhi.device
+mhidevice=LIBS:MHI/prismamhi.library
 
-# Prefer MHI for local files, fall back to Direct MAS if it cannot start
+# Prefer MHI for files and streams, fall back to Direct MAS if it cannot start
 audio_backend=auto
-mhidevice=DEVS:MHI/prismamhi.device
+mhidevice=LIBS:MHI/prismamhi.library
 ```
 
-For compatibility, `mhi=enabled` also selects required MHI mode. MHI playback uses eight 16 KB public-memory buffers. Playback data is replenished from the normal MASWaver event loop when the decoder returns buffers, so Workbench windows and playback timers remain serviced.
+For compatibility, `mhi=enabled` also selects required MHI mode. MHI playback uses eight 16 KB public-memory buffers. Both file and network data are replenished immediately in the normal MASWaver event loop when the decoder returns a buffer, so Workbench windows, network traffic and playback timers remain serviced. In `auto` mode, MASWaver falls back to Direct MAS if the configured MHI decoder cannot be opened or initialized.
