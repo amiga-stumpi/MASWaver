@@ -55,6 +55,7 @@
 #define ICY_META_BUF 256
 #define STREAMS_FILE "streams.txt"
 #define WINDOWS_FILE "MASWaver.win"
+#define CONFIG_FILE "MASWaver.conf"
 #define STREAMS_LINE_LEN 320
 #define PLS_MAX_FILES 256
 #define PLS_PATH_LEN 108
@@ -210,6 +211,9 @@ static LONG g_sound_treble;
 static LONG g_sound_volume = 10;
 static UBYTE g_lyrics_on;
 static UBYTE g_pending_lyrics_enable;
+static char g_audio_backend_mode[16] = "direct";
+static char g_mhi_device[128] = "DEVS:MHI/prismamhi.device";
+static char g_config_buf[512];
 static char g_current_timed[LYRICS_MAX_TIMED];
 static char g_sing_line[180];
 static char g_sing_next_line[180];
@@ -512,6 +516,45 @@ static void copy_trim(char *dst, LONG dst_size, const char *src, LONG len)
         dst[out++] = c;
     }
     dst[out] = 0;
+}
+
+static void load_audio_config(void)
+{
+    BPTR fh;
+    LONG n;
+    LONG start;
+    LONG i;
+
+    fh = Open((STRPTR)CONFIG_FILE, MODE_OLDFILE);
+    if (!fh) {
+        audio_backend_configure(g_audio_backend_mode, g_mhi_device);
+        return;
+    }
+    n = Read(fh, g_config_buf, sizeof(g_config_buf) - 1);
+    Close(fh);
+    if (n < 0) n = 0;
+    g_config_buf[n] = 0;
+    start = 0;
+    for (i = 0; i <= n; ++i) {
+        if (g_config_buf[i] == '\n' || g_config_buf[i] == '\r' ||
+            g_config_buf[i] == 0) {
+            char *line;
+            g_config_buf[i] = 0;
+            line = g_config_buf + start;
+            while (*line == ' ' || *line == '\t') ++line;
+            if (starts_with(line, "audio_backend=")) {
+                copy_trim(g_audio_backend_mode, sizeof(g_audio_backend_mode),
+                    line + 14, cstrlen(line + 14));
+            } else if (starts_with(line, "mhidevice=")) {
+                copy_trim(g_mhi_device, sizeof(g_mhi_device),
+                    line + 10, cstrlen(line + 10));
+            } else if (starts_with(line, "mhi=enabled")) {
+                strcpy(g_audio_backend_mode, "mhi");
+            }
+            start = i + 1;
+        }
+    }
+    audio_backend_configure(g_audio_backend_mode, g_mhi_device);
 }
 
 static int parse_url(const char *url, char *host, LONG host_size, char *path, LONG path_size, UWORD *port)
@@ -1209,8 +1252,9 @@ static void save_filelist_m3u(void)
 
     while (!done) {
         ULONG sigmask = (1UL << w->UserPort->mp_SigBit) | g_timer.sigmask;
-        ULONG got_sig = Wait(sigmask);
+        ULONG got_sig = Wait(sigmask | audio_backend_signal_mask());
         if (got_sig & g_timer.sigmask) { service_stream_timer_signal(); process_stream_deferred(); }
+        if (got_sig & audio_backend_signal_mask()) audio_backend_service();
         while (1) {
             struct IntuiMessage *msg = (struct IntuiMessage *)GetMsg(w->UserPort);
             if (!msg) break;
@@ -1663,8 +1707,9 @@ static void show_sound_window(void)
 
     while (!done) {
         ULONG sigmask = (1UL << w->UserPort->mp_SigBit) | g_timer.sigmask;
-        ULONG got_sig = Wait(sigmask);
+        ULONG got_sig = Wait(sigmask | audio_backend_signal_mask());
         if (got_sig & g_timer.sigmask) { service_stream_timer_signal(); process_stream_deferred(); }
+        if (got_sig & audio_backend_signal_mask()) audio_backend_service();
         while (1) {
             struct IntuiMessage *msg = (struct IntuiMessage *)GetMsg(w->UserPort);
             if (!msg) break;
@@ -1705,8 +1750,9 @@ static void show_info_window(void)
     draw_info_window(w);
     while (!done) {
         ULONG sigmask = (1UL << w->UserPort->mp_SigBit) | g_timer.sigmask;
-        ULONG got_sig = Wait(sigmask);
+        ULONG got_sig = Wait(sigmask | audio_backend_signal_mask());
         if (got_sig & g_timer.sigmask) { service_stream_timer_signal(); process_stream_deferred(); }
+        if (got_sig & audio_backend_signal_mask()) audio_backend_service();
         while (1) {
             struct IntuiMessage *msg = (struct IntuiMessage *)GetMsg(w->UserPort);
             if (!msg) break;
@@ -2365,8 +2411,9 @@ static void show_playlist_file_window(void)
     draw_playlist_window(w, current_dir, names, is_dir, count, top);
     while (!done) {
         ULONG sigmask = (1UL << w->UserPort->mp_SigBit) | g_timer.sigmask;
-        ULONG got_sig = Wait(sigmask);
+        ULONG got_sig = Wait(sigmask | audio_backend_signal_mask());
         if (got_sig & g_timer.sigmask) { service_stream_timer_signal(); process_stream_deferred(); }
+        if (got_sig & audio_backend_signal_mask()) audio_backend_service();
         while (1) {
             struct IntuiMessage *msg = (struct IntuiMessage *)GetMsg(w->UserPort);
             if (!msg) break;
@@ -3114,8 +3161,9 @@ static void show_file_add_window_mode(int dir_mode)
     draw_file_window(w, current_dir, names, is_dir, selected, count, top);
     while (!done) {
         ULONG sigmask = (1UL << w->UserPort->mp_SigBit) | g_timer.sigmask;
-        ULONG got_sig = Wait(sigmask);
+        ULONG got_sig = Wait(sigmask | audio_backend_signal_mask());
         if (got_sig & g_timer.sigmask) { service_stream_timer_signal(); process_stream_deferred(); }
+        if (got_sig & audio_backend_signal_mask()) audio_backend_service();
         while (1) {
             struct IntuiMessage *msg = (struct IntuiMessage *)GetMsg(w->UserPort);
             if (!msg) break;
@@ -3218,7 +3266,7 @@ static void show_dir_add_window(void)
 
 static LONG stream_read_transport(UBYTE *buf, LONG maxlen)
 {
-    if (g_stream.file_fh) { LONG n = Read(g_stream.file_fh, buf, maxlen); if (n <= 0) g_file_eof = 1; return n; }
+    if (g_stream.file_fh) { LONG n = Read(g_stream.file_fh, buf, maxlen); if (n <= 0) { g_file_eof = 1; audio_backend_end_input(); } return n; }
     if (g_pending_len > g_pending_pos) {
         LONG avail = g_pending_len - g_pending_pos;
         if (avail > maxlen) avail = maxlen;
@@ -4093,8 +4141,9 @@ static void show_lyrics_text_window(const char *artist, const char *title, const
     draw_lyrics_window(w, artist, title, lyrics, top);
     while (!done) {
         ULONG sigmask = (1UL << w->UserPort->mp_SigBit) | g_timer.sigmask;
-        ULONG got_sig = Wait(sigmask);
+        ULONG got_sig = Wait(sigmask | audio_backend_signal_mask());
         if (got_sig & g_timer.sigmask) { service_stream_timer_signal(); process_stream_deferred(); }
+        if (got_sig & audio_backend_signal_mask()) audio_backend_service();
         while (1) {
             struct IntuiMessage *msg = (struct IntuiMessage *)GetMsg(w->UserPort);
             if (!msg) break;
@@ -4722,6 +4771,7 @@ static void queue_stream_end_action(UBYTE action)
 static void service_stream_timer_signal(void)
 {
     if (!timer_drain()) return;
+    audio_backend_service();
     if (g_stream.active && g_stream.started) {
         int got_data;
         ULONG used;
@@ -4881,8 +4931,9 @@ static void play_selected(void)
         }
     }
 
+    audio_backend_select(g_stream.file_fh != 0);
     if (!audio_backend_prepare()) {
-        set_status("MAS buffer init failed");
+        set_status(audio_backend_last_error());
         draw_ui();
         stream_close_transport();
         return;
@@ -4894,6 +4945,7 @@ static void play_selected(void)
         set_status("Starting file...");
         draw_status();
         if (!local_start_fill()) {
+            audio_backend_stop();
             stream_close_transport();
             g_stream.active = 0;
             set_status("MP3 file read failed");
@@ -4905,6 +4957,7 @@ static void play_selected(void)
         set_status("Prebuffering stream...");
         draw_status();
         if (!stream_prebuffer()) {
+            audio_backend_stop();
             stream_close_transport();
             g_stream.active = 0;
             set_status("Stream prebuffer failed");
@@ -4923,7 +4976,8 @@ static void play_selected(void)
     g_stream.started = 1;
     if (g_stream.file_fh) start_play_clock();
     g_status_tick = 0;
-    set_status("Playing");
+    sprintf(g_status_scratch, "Playing (%s)", audio_backend_name());
+    set_status(g_status_scratch);
     draw_status();
     if (g_stream.file_fh) draw_play_time();
     timer_start();
@@ -4978,14 +5032,16 @@ int main(void)
     GfxBase = (struct GfxBase *)OpenLibrary((STRPTR)"graphics.library", 0);
     if (!IntuitionBase || !GfxBase) goto out;
     sound_defaults();
+    load_audio_config();
     load_window_states();
     timer_init();
     if (!open_gui()) goto out;
     sigmask = (1UL << g_win->UserPort->mp_SigBit) | g_timer.sigmask;
     load_playlist();
     while (!done) {
-        ULONG got_sig = Wait(sigmask);
+        ULONG got_sig = Wait(sigmask | audio_backend_signal_mask());
         if (got_sig & g_timer.sigmask) { service_stream_timer_signal(); process_stream_deferred(); }
+        if (got_sig & audio_backend_signal_mask()) audio_backend_service();
         while (g_win && g_win->UserPort) {
             struct IntuiMessage *msg = (struct IntuiMessage *)GetMsg(g_win->UserPort);
             if (!msg) break;

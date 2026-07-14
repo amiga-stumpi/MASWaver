@@ -5,13 +5,14 @@ LDFLAGS=-mcrt=nix13
 BUILD=build
 TARGET=$(BUILD)/MASWaver
 CORE=$(BUILD)/mwcore
-CORE_OBJS=$(BUILD)/main.o $(BUILD)/audio_backend.o $(BUILD)/mas_direct.o $(BUILD)/mas_irq.o
+CORE_OBJS=$(BUILD)/main.o $(BUILD)/audio_backend.o $(BUILD)/mhi_backend.o $(BUILD)/mhi_calls.o $(BUILD)/mas_direct.o $(BUILD)/mas_irq.o
 LAUNCHER_OBJS=$(BUILD)/launcher.o
 STREAMS=$(BUILD)/streams.txt
+CONFIG=$(BUILD)/MASWaver.conf
 
 .PHONY: all clean
 
-all: $(TARGET) $(CORE) $(STREAMS)
+all: $(TARGET) $(CORE) $(STREAMS) $(CONFIG)
 
 $(BUILD):
 	mkdir -p $(BUILD)
@@ -33,3 +34,6 @@ $(STREAMS): streams.txt | $(BUILD)
 
 clean:
 	rm -rf $(BUILD)
+
+$(CONFIG): MASWaver.conf | $(BUILD)
+	cp MASWaver.conf $@

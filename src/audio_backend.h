@@ -3,6 +3,12 @@
 
 #include <exec/types.h>
 
+#define AUDIO_BACKEND_MODE_DIRECT 0
+#define AUDIO_BACKEND_MODE_MHI 1
+#define AUDIO_BACKEND_MODE_AUTO 2
+
+void audio_backend_configure(const char *mode, const char *mhi_driver);
+void audio_backend_select(int local_file);
 int audio_backend_prepare(void);
 void audio_backend_reset(void);
 void audio_backend_shutdown(void);
@@ -23,6 +29,9 @@ ULONG audio_backend_min_prebuffer(void);
 int audio_backend_had_underrun(void);
 void audio_backend_clear_underrun(void);
 void audio_backend_service(void);
+void audio_backend_end_input(void);
+ULONG audio_backend_signal_mask(void);
 const char *audio_backend_name(void);
+const char *audio_backend_last_error(void);
 
 #endif

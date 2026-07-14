@@ -44,3 +44,24 @@ The current backend uses the proven MAS-Player V1.3 style inside MASWaver: MAS h
 Playback backend architecture:
 
 MASWaver's player and streaming code now uses an internal backend-neutral API. The only selectable implementation in this phase remains the existing Direct MAS backend, so playback behavior and configuration are unchanged. This boundary prepares a later optional MHI implementation without coupling MHI lifecycle or buffer handling to the user interface and network code.
+
+## Optional MHI backend (Phase 2)
+
+Local MP3 files can optionally use an installed MHI decoder library. Internet streams continue to use the Direct MAS backend in this phase.
+
+`MASWaver.conf` is read from the program directory:
+
+```ini
+# Existing Direct MAS behavior
+audio_backend=direct
+
+# Require MHI for local files
+audio_backend=mhi
+mhidevice=DEVS:MHI/prismamhi.device
+
+# Prefer MHI for local files, fall back to Direct MAS if it cannot start
+audio_backend=auto
+mhidevice=DEVS:MHI/prismamhi.device
+```
+
+For compatibility, `mhi=enabled` also selects required MHI mode. MHI playback uses eight 16 KB public-memory buffers. Playback data is replenished from the normal MASWaver event loop when the decoder returns buffers, so Workbench windows and playback timers remain serviced.
