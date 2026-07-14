@@ -1,5 +1,7 @@
 # MASWaver
 
+Current release: **1.3**
+
 MASWaver is an AmigaOS 1.3 Workbench MP3 stream player for MAS Player Pro compatible hardware.
 
 Current build:

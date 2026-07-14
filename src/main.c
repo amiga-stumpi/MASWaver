@@ -30,8 +30,8 @@
 #include "audio_backend.h"
 
 
-#define APP_TITLE "MASWaver v1.2"
-#define VERSION_TEXT "MASWaver v1.2 by Marcel Jaehne (c)2026"
+#define APP_TITLE "MASWaver v1.3"
+#define VERSION_TEXT "MASWaver v1.3 by Marcel Jaehne (c)2026"
 
 #define WIN_W 520
 #define WIN_H 232
@@ -1529,7 +1529,7 @@ static void draw_info_window(struct Window *w)
         WORD x = (WORD)(w->BorderLeft + 12);
         WORD y = (WORD)(w->BorderTop + 14);
         info_text(rp, x, y, "MASWaver for Kickstart 1.3");
-        info_text(rp, x, (WORD)(y + 14), "Version: v1.2");
+        info_text(rp, x, (WORD)(y + 14), "Version: v1.3");
         info_text(rp, x, (WORD)(y + 28), "by Marcel Jaehne (c)2026");
         info_text(rp, x, (WORD)(y + 44), "MP3 internet streams for MAS Player Pro");
         info_text(rp, x, (WORD)(y + 62), "If you want to buy me a coffee,");
@@ -3323,7 +3323,7 @@ static int stream_send_request(const char *url)
     strncat(req, path, sizeof(req)-strlen(req)-1);
     strncat(req, " HTTP/1.1\r\nHost: ", sizeof(req)-strlen(req)-1);
     strncat(req, host, sizeof(req)-strlen(req)-1);
-    strncat(req, "\r\nUser-Agent: MASWaver/1.2\r\nAccept: */*\r\nIcy-MetaData: 1\r\nConnection: close\r\n\r\n", sizeof(req)-strlen(req)-1);
+    strncat(req, "\r\nUser-Agent: MASWaver/1.3\r\nAccept: */*\r\nIcy-MetaData: 1\r\nConnection: close\r\n\r\n", sizeof(req)-strlen(req)-1);
     return stream_write_all_transport(req, cstrlen(req));
 }
 
@@ -3672,7 +3672,7 @@ static int lyrics_http_get(const char *url, char *response, LONG response_size, 
     strncat(req, path, sizeof(req)-strlen(req)-1);
     strncat(req, " HTTP/1.1\r\nHost: ", sizeof(req)-strlen(req)-1);
     strncat(req, host, sizeof(req)-strlen(req)-1);
-    strncat(req, "\r\nUser-Agent: MASWaver/1.2\r\nAccept: application/json\r\nConnection: close\r\n\r\n", sizeof(req)-strlen(req)-1);
+    strncat(req, "\r\nUser-Agent: MASWaver/1.3\r\nAccept: application/json\r\nConnection: close\r\n\r\n", sizeof(req)-strlen(req)-1);
 
     if (send(fd, req, cstrlen(req), 0) <= 0) {
         CloseSocket(fd);
