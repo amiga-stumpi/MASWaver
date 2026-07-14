@@ -30,8 +30,8 @@
 #include "mas_direct.h"
 
 
-#define APP_TITLE "MASWaver v1.1"
-#define VERSION_TEXT "MASWaver v1.1 by Marcel Jaehne (c)2026"
+#define APP_TITLE "MASWaver v1.2"
+#define VERSION_TEXT "MASWaver v1.2 by Marcel Jaehne (c)2026"
 
 #define WIN_W 520
 #define WIN_H 232
@@ -326,6 +326,7 @@ static void load_window_states(void)
             parse_window_line(buf + start, "fileadd", &g_window_states[WINSTATE_FILE_ADD]);
             parse_window_line(buf + start, "diradd", &g_window_states[WINSTATE_DIR_ADD]);
             parse_window_line(buf + start, "savem3u", &g_window_states[WINSTATE_SAVE_M3U]);
+            parse_window_line(buf + start, "lyrics", &g_window_states[WINSTATE_LYRICS]);
             if (old == '\r' && buf[i + 1] == '\n') ++i;
             start = i + 1;
         }
@@ -350,6 +351,7 @@ static void save_window_states(void)
     write_window_state_line(fh, "fileadd", &g_window_states[WINSTATE_FILE_ADD]);
     write_window_state_line(fh, "diradd", &g_window_states[WINSTATE_DIR_ADD]);
     write_window_state_line(fh, "savem3u", &g_window_states[WINSTATE_SAVE_M3U]);
+    write_window_state_line(fh, "lyrics", &g_window_states[WINSTATE_LYRICS]);
     Close(fh);
 }
 
@@ -388,6 +390,26 @@ static void clamp_new_window_size(struct NewWindow *nw, WORD min_w, WORD min_h, 
     if (nw->Height < min_h) nw->Height = min_h;
     if (max_w > 0 && nw->Width > max_w) nw->Width = max_w;
     if (max_h > 0 && nw->Height > max_h) nw->Height = max_h;
+}
+
+static void fit_new_window_to_screen(struct NewWindow *nw, struct Screen *screen)
+{
+    WORD screen_w;
+    WORD screen_h;
+
+    if (!nw || !screen) return;
+    screen_w = screen->Width;
+    screen_h = screen->Height;
+    if (screen_w <= 0 || screen_h <= 0) return;
+
+    if (nw->Width > screen_w) nw->Width = screen_w;
+    if (nw->Height > screen_h) nw->Height = screen_h;
+    if (nw->LeftEdge < 0) nw->LeftEdge = 0;
+    if (nw->TopEdge < 0) nw->TopEdge = 0;
+    if ((LONG)nw->LeftEdge + nw->Width > screen_w)
+        nw->LeftEdge = (WORD)(screen_w - nw->Width);
+    if ((LONG)nw->TopEdge + nw->Height > screen_h)
+        nw->TopEdge = (WORD)(screen_h - nw->Height);
 }
 
 static struct Window *open_window_with_position_fallback(struct NewWindow *nw)
@@ -1293,6 +1315,21 @@ static void draw_status(void)
     }
 }
 
+static void draw_lyrics_loading_status(int show_wait)
+{
+    WORD x;
+    WORD r;
+    WORD y;
+
+    set_status(show_wait ? "Loading lyrics... please wait..." : "Loading lyrics...");
+    if (!g_win) return;
+    x = (WORD)(win_left() + 4);
+    r = (WORD)(win_right() - 4);
+    if (r < x) r = x;
+    y = status_top();
+    draw_status_line(x, (WORD)(y + 10), r, g_status);
+}
+
 static void draw_play_time(void)
 {
     char prefix[64];
@@ -1446,7 +1483,7 @@ static void draw_info_window(struct Window *w)
         WORD x = (WORD)(w->BorderLeft + 12);
         WORD y = (WORD)(w->BorderTop + 14);
         info_text(rp, x, y, "MASWaver for Kickstart 1.3");
-        info_text(rp, x, (WORD)(y + 14), "Version: v1.1");
+        info_text(rp, x, (WORD)(y + 14), "Version: v1.2");
         info_text(rp, x, (WORD)(y + 28), "by Marcel Jaehne (c)2026");
         info_text(rp, x, (WORD)(y + 44), "MP3 internet streams for MAS Player Pro");
         info_text(rp, x, (WORD)(y + 62), "If you want to buy me a coffee,");
@@ -3236,7 +3273,7 @@ static int stream_send_request(const char *url)
     strncat(req, path, sizeof(req)-strlen(req)-1);
     strncat(req, " HTTP/1.1\r\nHost: ", sizeof(req)-strlen(req)-1);
     strncat(req, host, sizeof(req)-strlen(req)-1);
-    strncat(req, "\r\nUser-Agent: MASWaver/1.1\r\nAccept: */*\r\nIcy-MetaData: 1\r\nConnection: close\r\n\r\n", sizeof(req)-strlen(req)-1);
+    strncat(req, "\r\nUser-Agent: MASWaver/1.2\r\nAccept: */*\r\nIcy-MetaData: 1\r\nConnection: close\r\n\r\n", sizeof(req)-strlen(req)-1);
     return stream_write_all_transport(req, cstrlen(req));
 }
 
@@ -3567,6 +3604,7 @@ static int lyrics_http_get(const char *url, char *response, LONG response_size, 
     char req[768];
     UWORD port;
     int fd;
+    int show_wait = 0;
     LONG used = 0;
 
     if (response_len) *response_len = 0;
@@ -3584,7 +3622,7 @@ static int lyrics_http_get(const char *url, char *response, LONG response_size, 
     strncat(req, path, sizeof(req)-strlen(req)-1);
     strncat(req, " HTTP/1.1\r\nHost: ", sizeof(req)-strlen(req)-1);
     strncat(req, host, sizeof(req)-strlen(req)-1);
-    strncat(req, "\r\nUser-Agent: MASWaver/1.1\r\nAccept: application/json\r\nConnection: close\r\n\r\n", sizeof(req)-strlen(req)-1);
+    strncat(req, "\r\nUser-Agent: MASWaver/1.2\r\nAccept: application/json\r\nConnection: close\r\n\r\n", sizeof(req)-strlen(req)-1);
 
     if (send(fd, req, cstrlen(req), 0) <= 0) {
         CloseSocket(fd);
@@ -3593,8 +3631,23 @@ static int lyrics_http_get(const char *url, char *response, LONG response_size, 
     }
 
     while (used < response_size - 1) {
+        fd_set read_fds;
+        struct __timeval timeout;
+        LONG ready;
         LONG want = response_size - 1 - used;
         LONG n;
+
+        FD_ZERO(&read_fds);
+        FD_SET(fd, &read_fds);
+        timeout.tv_secs = 1;
+        timeout.tv_micro = 0;
+        ready = WaitSelect(fd + 1, &read_fds, 0, 0, &timeout, 0);
+        if (ready < 0) break;
+        if (ready == 0) {
+            show_wait = !show_wait;
+            draw_lyrics_loading_status(show_wait);
+            continue;
+        }
         if (want > 1024) want = 1024;
         n = recv(fd, response + used, want, 0);
         if (n <= 0) break;
@@ -3892,8 +3945,7 @@ static int fetch_lyrics_text(const char *artist, const char *title, char *lyrics
     strncat(url, enc_title, sizeof(url)-strlen(url)-1);
     strncat(url, "&pass=true&sequence=1,2,3&timestamps=true", sizeof(url)-strlen(url)-1);
 
-    set_status("Loading lyrics...");
-    draw_status();
+    draw_lyrics_loading_status(0);
     if (lyrics_http_get(url, response, LYRICS_MAX_RESPONSE, &response_len) && lyrics_http_body(response, response_len, &body, &body_len)) {
         if (header_contains_token(response, "transfer-encoding:", "chunked")) body_len = decode_chunked_body(body, body_len);
         if (strstr(response, " 200 ") || strstr(response, " 200 OK")) {
@@ -4023,16 +4075,17 @@ static void show_lyrics_text_window(const char *artist, const char *title, const
     int done = 0;
     lyrics_strip_timestamps_for_display((char *)lyrics);
     memset(&nw, 0, sizeof(nw));
-    apply_window_state(&nw, WINSTATE_LYRICS, 0, 0, 420, 260);
+    apply_window_state(&nw, WINSTATE_LYRICS, 0, 0, 420, 220);
     clamp_new_window_size(&nw, 260, 120, 640, 480);
+    if (g_win && g_win->WScreen) fit_new_window_to_screen(&nw, g_win->WScreen);
     nw.DetailPen = 0;
     nw.BlockPen = 1;
     nw.IDCMPFlags = IDCMP_CLOSEWINDOW | IDCMP_REFRESHWINDOW | IDCMP_MOUSEBUTTONS | IDCMP_NEWSIZE | IDCMP_RAWKEY;
     nw.Flags = WFLG_CLOSEGADGET | WFLG_DRAGBAR | WFLG_DEPTHGADGET | WFLG_SIZEGADGET | WFLG_ACTIVATE | WFLG_SMART_REFRESH;
     nw.MinWidth = 260;
     nw.MinHeight = 120;
-    nw.MaxWidth = 640;
-    nw.MaxHeight = 480;
+    nw.MaxWidth = (g_win && g_win->WScreen) ? g_win->WScreen->Width : 640;
+    nw.MaxHeight = (g_win && g_win->WScreen) ? g_win->WScreen->Height : 480;
     nw.Title = (UBYTE *)"Lyrics";
     nw.Type = WBENCHSCREEN;
     w = open_window_with_position_fallback(&nw);
