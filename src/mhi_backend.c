@@ -8,7 +8,7 @@
 
 #include "mhi_backend.h"
 
-#define MHI_BUFFER_COUNT 8
+#define MHI_BUFFER_COUNT 16
 #define MHI_BUFFER_SIZE 16384UL
 #define MHI_DRIVER_NAME_SIZE 128
 

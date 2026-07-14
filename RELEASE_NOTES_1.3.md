@@ -11,7 +11,7 @@
 - Added `mhi=enabled` as a compatibility setting for selecting MHI mode.
 - Added `auto` mode, which prefers MHI and falls back to the built-in Direct MAS backend if MHI cannot be initialized.
 - Added a default MHI library path of `LIBS:MHI/prismamhi.library`.
-- Added eight 16 KB MHI playback buffers allocated in public memory.
+- Added sixteen 16 KB MHI playback buffers allocated in public memory.
 - Added signal-driven MHI buffer recycling and immediate refill for uninterrupted playback.
 - Integrated MHI signals into the main window and all auxiliary window event loops, keeping playback active while dialogs are open.
 - Added MHI support for the existing volume, bass and treble controls when provided by the selected decoder library.

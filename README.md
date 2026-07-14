@@ -66,4 +66,4 @@ audio_backend=auto
 mhidevice=LIBS:MHI/prismamhi.library
 ```
 
-For compatibility, `mhi=enabled` also selects required MHI mode. MHI playback uses eight 16 KB public-memory buffers. Both file and network data are replenished immediately in the normal MASWaver event loop when the decoder returns a buffer, so Workbench windows, network traffic and playback timers remain serviced. In `auto` mode, MASWaver falls back to Direct MAS if the configured MHI decoder cannot be opened or initialized.
+For compatibility, `mhi=enabled` also selects required MHI mode. MHI playback uses sixteen 16 KB public-memory buffers. Both file and network data are replenished immediately in the normal MASWaver event loop when the decoder returns a buffer, so Workbench windows, network traffic and playback timers remain serviced. In `auto` mode, MASWaver falls back to Direct MAS if the configured MHI decoder cannot be opened or initialized.

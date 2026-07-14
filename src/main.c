@@ -60,11 +60,13 @@
 #define PLS_MAX_FILES 256
 #define PLS_PATH_LEN 108
 #define HTTP_BUF_SIZE 2048
-#define STREAM_NET_CHUNK 512
+#define STREAM_NET_CHUNK 2048
 #define PREBUFFER_BYTES 131072UL
+#define STREAM_START_MIN_BYTES 65536UL
+#define PREBUFFER_WAIT_RETRIES 10
 #define LOCAL_START_BYTES 32768UL
 #define PUMP_INTERVAL_US 20000UL
-#define MAX_PUMP_READS 16
+#define MAX_PUMP_READS 8
 #define STATUS_UPDATE_TICKS 25
 #define PLAY_TICKS_PER_SEC (1000000UL / PUMP_INTERVAL_US)
 #define STREAM_EOF_DRAIN_BYTES 4096UL
@@ -194,6 +196,7 @@ static int g_stack_missing;
 static char g_stream_error[STATUS_LEN];
 static UBYTE g_file_list_mode;
 static UBYTE g_file_eof;
+static UBYTE g_prebuffering;
 static UBYTE g_deferred_stream_action;
 static LONG g_icy_metaint;
 static LONG g_icy_audio_left;
@@ -1396,7 +1399,7 @@ static void draw_play_time(void)
     strncat(prefix, "Bitrate: ", sizeof(prefix) - strlen(prefix) - 1);
     strncat(prefix, g_icy_bitrate[0] ? g_icy_bitrate : "-", sizeof(prefix) - strlen(prefix) - 1);
     strncat(prefix, "  Time: ", sizeof(prefix) - strlen(prefix) - 1);
-    tx = (WORD)(x + cstrlen(prefix) * 8);
+    tx = (WORD)(x + TextLength(g_win->RPort, (STRPTR)prefix, cstrlen(prefix)));
     if (tx >= r) return;
 
     secs = current_play_elapsed_secs();
@@ -3280,6 +3283,17 @@ static LONG stream_read_transport(UBYTE *buf, LONG maxlen)
         }
         return avail;
     }
+    if (g_prebuffering) {
+        fd_set read_fds;
+        struct __timeval timeout;
+        LONG ready;
+        FD_ZERO(&read_fds);
+        FD_SET(g_stream.fd, &read_fds);
+        timeout.tv_secs = 1;
+        timeout.tv_micro = 0;
+        ready = WaitSelect(g_stream.fd + 1, &read_fds, 0, 0, &timeout, 0);
+        if (ready <= 0) return -1;
+    }
     return recv(g_stream.fd, buf, maxlen, 0);
 }
 
@@ -4451,7 +4465,8 @@ static int icy_consume_metadata(void)
         if (g_icy_need_len) {
             UBYTE len_byte;
             LONG n = stream_read_transport(&len_byte, 1);
-            if (n <= 0) return 0;
+            if (n < 0) return -1;
+            if (n == 0) return 0;
             g_icy_meta_remaining = ((LONG)len_byte) * 16L;
             g_icy_meta_pos = 0;
             memset(g_icy_meta_buf, 0, sizeof(g_icy_meta_buf));
@@ -4468,7 +4483,8 @@ static int icy_consume_metadata(void)
             LONG n;
             if (want > (LONG)sizeof(tmp)) want = sizeof(tmp);
             n = stream_read_transport(tmp, want);
-            if (n <= 0) return 0;
+            if (n < 0) return -1;
+            if (n == 0) return 0;
             if (g_icy_meta_pos < (LONG)sizeof(g_icy_meta_buf) - 1) {
                 LONG copy = n;
                 if (copy > ((LONG)sizeof(g_icy_meta_buf) - 1 - g_icy_meta_pos)) {
@@ -4494,7 +4510,8 @@ static LONG stream_read_audio(UBYTE *buf, LONG maxlen)
         LONG want;
         LONG n;
         if (g_icy_audio_left <= 0) {
-            if (!icy_consume_metadata()) return 0;
+            int metadata_result = icy_consume_metadata();
+            if (metadata_result <= 0) return metadata_result;
             continue;
         }
         want = maxlen;
@@ -4837,11 +4854,22 @@ static void process_stream_deferred(void)
 
 static int stream_prebuffer(void)
 {
+    int waits = 0;
+    ULONG used;
     g_total_stream_bytes = 0;
+    g_prebuffering = 1;
     while (audio_backend_buffer_used() < PREBUFFER_BYTES) {
         LONG n = stream_read_audio(g_net_buf, STREAM_NET_CHUNK);
-        if (n <= 0) break;
-        if (audio_backend_write(g_net_buf, (ULONG)n) != (ULONG)n) return 0;
+        if (n < 0) {
+            if (++waits >= PREBUFFER_WAIT_RETRIES) break;
+            continue;
+        }
+        if (n == 0) break;
+        waits = 0;
+        if (audio_backend_write(g_net_buf, (ULONG)n) != (ULONG)n) {
+            g_prebuffering = 0;
+            return 0;
+        }
         g_total_stream_bytes += (ULONG)n;
         if (g_icy_dirty) {
             g_icy_dirty = 0;
@@ -4853,7 +4881,10 @@ static int stream_prebuffer(void)
             draw_status();
         }
     }
-    return audio_backend_buffer_used() >= audio_backend_min_prebuffer();
+    g_prebuffering = 0;
+    used = audio_backend_buffer_used();
+    return used >= audio_backend_min_prebuffer() ||
+        (strcmp(audio_backend_name(), "MHI") == 0 && used >= STREAM_START_MIN_BYTES);
 }
 
 static int local_start_fill(void)
