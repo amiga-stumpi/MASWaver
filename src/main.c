@@ -132,9 +132,6 @@ LONG __stack = 524288;
 struct IntuitionBase *IntuitionBase;
 struct GfxBase *GfxBase;
 struct Library *SocketBase;
-static BPTR g_net_log_fh;
-static UBYTE g_net_log_started;
-static char g_net_log_line[128];
 
 struct StreamEntry {
     char title[TITLE_LEN];
@@ -430,41 +427,6 @@ static struct Window *open_window_with_position_fallback(struct NewWindow *nw)
     nw->LeftEdge = 0;
     nw->TopEdge = 0;
     return OpenWindow(nw);
-}
-
-static void net_log_open(void)
-{
-    if (!g_net_log_started) {
-        g_net_log_fh = Open((STRPTR)"RAM:MASWaverNet.log", MODE_NEWFILE);
-        if (g_net_log_fh) {
-            Close(g_net_log_fh);
-            g_net_log_fh = 0;
-            g_net_log_started = 1;
-        }
-    }
-}
-
-static void net_log(const char *s)
-{
-    BPTR fh;
-
-    if (!s) return;
-    net_log_open();
-    fh = Open((STRPTR)"RAM:MASWaverNet.log", MODE_OLDFILE);
-    if (fh) {
-        Seek(fh, 0, OFFSET_END);
-        Write(fh, (APTR)s, cstrlen(s));
-        Write(fh, (APTR)"\n", 1);
-        Close(fh);
-    }
-}
-
-static void net_log_close(void)
-{
-    if (g_net_log_fh) {
-        Close(g_net_log_fh);
-        g_net_log_fh = 0;
-    }
 }
 
 static void set_stream_error(const char *s);
@@ -4698,23 +4660,18 @@ static int stream_open_direct(const char *url)
         g_stream.fd = connect_http(g_http_current, g_http_path, sizeof(g_http_path));
         if (g_stream.fd < 0) { set_stream_error("HTTP socket connect failed"); return -1; }
         set_status("Requesting stream..."); draw_status();
-        net_log("request send call");
         if (!stream_send_request(g_http_current)) {
             stream_close_transport();
             set_stream_error(g_transport_error[0] ? g_transport_error : "HTTP request send failed");
             return -1;
         }
         set_status("Reading stream header..."); draw_status();
-        net_log("header read call");
         if (!stream_read_headers(g_http_headers, sizeof(g_http_headers))) {
             stream_close_transport();
             set_stream_error("HTTP header read failed");
             return -1;
         }
-        net_log("header read ok");
         code = stream_status_code(g_http_headers);
-        sprintf(g_net_log_line, "status code=%ld", (LONG)code);
-        net_log(g_net_log_line);
         icy_parse_headers(g_http_headers);
         draw_status();
         
@@ -5159,7 +5116,6 @@ out:
     if (g_win) { remember_window_state(WINSTATE_MAIN, g_win); ClearMenuStrip(g_win); CloseWindow(g_win); g_win = 0; }
     save_window_states();
     timer_cleanup();
-    net_log_close();
     if (SocketBase) CloseLibrary(SocketBase);
     if (GfxBase) CloseLibrary((struct Library *)GfxBase);
     if (IntuitionBase) CloseLibrary((struct Library *)IntuitionBase);
